@@ -1,0 +1,12 @@
+name = "notion-coding-web"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Opsional: pakai Workers AI Cloudflare buat chat (gantinya OpenAI eksternal)
+# [ai]
+# binding = "AI"
+
+# Wajib buat simpan riwayat chat di server (bikin namespace-nya dulu)
+[[kv_namespaces]]
+binding = "CHAT"
+id = "ISI_NAMESPACE_ID_KAMU"
