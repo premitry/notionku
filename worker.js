@@ -17,6 +17,8 @@ export default {
       if (p === "/api/history/delete") return apiHistoryDelete(request, env);
       if (p === "/api/memory") return apiMemory(request, env);
       if (p === "/api/memory/save") return apiMemorySave(request, env);
+      if (p === "/api/settings") return apiSettings(request, env);
+      if (p === "/api/settings/save") return apiSettingsSave(request, env);
       if (p.startsWith("/api/")) return json({ error: "Not found" }, 404);
       return htmlResponse();
     } catch (e) {
@@ -36,8 +38,28 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function getTokens(env) {
+async function getConfig(env) {
+  const cfg = { tokens: [], openai_key: "", openai_base: "", openai_model: "", ai_model: "" };
+  if (env.CHAT) {
+    const saved = await env.CHAT.get("config", "json");
+    if (saved) {
+      cfg.tokens = saved.tokens || [];
+      cfg.openai_key = saved.openai_key || "";
+      cfg.openai_base = saved.openai_base || "";
+      cfg.openai_model = saved.openai_model || "";
+      cfg.ai_model = saved.ai_model || "";
+    }
+  }
+  return cfg;
+}
+
+async function getTokens(env) {
   const set = [];
+  const cfg = await getConfig(env);
+  cfg.tokens.forEach((t) => {
+    const v = String(t).trim();
+    if (v) set.push(v);
+  });
   if (env.NOTION_TOKENS)
     env.NOTION_TOKENS.split(",").forEach((t) => {
       const v = t.trim();
@@ -53,12 +75,12 @@ function getTokens(env) {
     if (uniq.indexOf(t) < 0) uniq.push(t);
   });
   if (!uniq.length)
-    throw new Error("Belum ada NOTION_TOKENS / NOTION_TOKEN_1 / NOTION_TOKEN");
+    throw new Error("Belum ada token Notion. Buka Pengaturan di web buat nambahin, atau set NOTION_TOKENS.");
   return uniq;
 }
 
-function pickToken(env, acc) {
-  const tokens = getTokens(env);
+async function pickToken(env, acc) {
+  const tokens = await getTokens(env);
   const i = parseInt(acc || "0", 10) || 0;
   return tokens[i] || tokens[0];
 }
@@ -107,7 +129,7 @@ function pageTitle(p) {
 }
 
 async function apiAccounts(env) {
-  const tokens = getTokens(env);
+  const tokens = await getTokens(env);
   const accounts = await Promise.all(
     tokens.map(async (tk, i) => {
       try {
@@ -126,7 +148,7 @@ async function apiAccounts(env) {
 async function apiSearch(request, env) {
   const u = new URL(request.url);
   const q = u.searchParams.get("q") || "";
-  const token = pickToken(env, u.searchParams.get("acc"));
+  const token = await pickToken(env, u.searchParams.get("acc"));
   const data = await notion(
     env,
     "/search",
@@ -178,7 +200,7 @@ async function apiPage(request, env) {
   const u = new URL(request.url);
   const id = u.searchParams.get("id");
   if (!id) return json({ error: "id wajib" }, 400);
-  const allTokens = getTokens(env);
+  const allTokens = await getTokens(env);
   const acc = parseInt(u.searchParams.get("acc") || "0", 10) || 0;
   const turbo = u.searchParams.get("turbo") === "1" && allTokens.length > 1;
   const tokens = turbo ? allTokens : [allTokens[acc] || allTokens[0]];
@@ -190,7 +212,7 @@ async function apiPage(request, env) {
 
 async function apiUpdateBlock(request, env) {
   const body = await request.json();
-  const token = pickToken(env, body.acc);
+  const token = await pickToken(env, body.acc);
   const type = body.type || "code";
   const payload = {};
   payload[type] = { rich_text: [{ type: "text", text: { content: body.text || "" } }] };
@@ -206,7 +228,7 @@ async function apiUpdateBlock(request, env) {
 
 async function apiAppend(request, env) {
   const body = await request.json();
-  const token = pickToken(env, body.acc);
+  const token = await pickToken(env, body.acc);
   const data = await notion(
     env,
     "/blocks/" + body.pageId + "/children",
@@ -233,8 +255,10 @@ async function apiAppend(request, env) {
 async function apiChat(request, env) {
   const body = await request.json();
   const messages = body.messages || [];
-  if (!env.OPENAI_API_KEY && env.AI) {
-    const stream = await env.AI.run(body.model || env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct", {
+  const cfg = await getConfig(env);
+  const key = cfg.openai_key || env.OPENAI_API_KEY;
+  if (!key && env.AI) {
+    const stream = await env.AI.run(body.model || cfg.ai_model || env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct", {
       messages,
       stream: true,
     });
@@ -242,14 +266,14 @@ async function apiChat(request, env) {
       headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
     });
   }
-  if (!env.OPENAI_API_KEY)
-    return json({ error: "OPENAI_API_KEY / binding AI belum di-set" }, 400);
-  const base = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const model = body.model || env.OPENAI_MODEL || "gpt-4o-mini";
+  if (!key)
+    return json({ error: "OpenAI API Key belum di-set. Buka Pengaturan di web atau aktifin binding AI." }, 400);
+  const base = cfg.openai_base || env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const model = body.model || cfg.openai_model || env.OPENAI_MODEL || "gpt-4o-mini";
   const res = await fetch(base + "/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: "Bearer " + env.OPENAI_API_KEY,
+      Authorization: "Bearer " + key,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ model, messages, stream: true }),
@@ -320,6 +344,46 @@ async function apiMemorySave(request, env) {
   const facts = (body.facts || []).slice(0, 100);
   await env.CHAT.put("memory:facts", JSON.stringify(facts));
   return json({ ok: true, facts });
+}
+
+function maskTok(t) {
+  t = String(t);
+  return t.length <= 10 ? "****" : t.slice(0, 6) + "..." + t.slice(-4);
+}
+
+async function apiSettings(request, env) {
+  if (!env.CHAT)
+    return json({ error: "KV binding CHAT belum di-set. Deploy dengan KV namespace dulu." }, 400);
+  const cfg = await getConfig(env);
+  return json({
+    tokens: cfg.tokens.map(maskTok),
+    openai_key_set: !!cfg.openai_key,
+    openai_base: cfg.openai_base,
+    openai_model: cfg.openai_model,
+    ai_model: cfg.ai_model,
+  });
+}
+
+async function apiSettingsSave(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const body = await request.json();
+  const cur = await getConfig(env);
+  let tokens = cur.tokens;
+  if (Array.isArray(body.tokens))
+    tokens = body.tokens.map((t) => String(t).trim()).filter((t) => t);
+  let key = cur.openai_key;
+  if (typeof body.openai_key === "string" && body.openai_key.trim())
+    key = body.openai_key.trim();
+  if (body.clear_openai_key) key = "";
+  const next = {
+    tokens: tokens,
+    openai_key: key,
+    openai_base: (body.openai_base || "").trim(),
+    openai_model: (body.openai_model || "").trim(),
+    ai_model: (body.ai_model || "").trim(),
+  };
+  await env.CHAT.put("config", JSON.stringify(next));
+  return json({ ok: true, tokenCount: tokens.length });
 }
 
 function htmlResponse() {
@@ -404,7 +468,7 @@ mark.find{background:#e7b94e;color:#000;border-radius:2px}
 <body>
 <div class="app">
   <div class="col side">
-    <h1 class="brand">🧑‍💻 Notion Coding<span style="flex:1"></span><button class="btn" id="theme" title="Tema">🌗</button></h1>
+    <h1 class="brand">🧑‍💻 Notion Coding<span style="flex:1"></span><button class="btn" id="settings" title="Pengaturan">⚙️</button><button class="btn" id="theme" title="Tema">🌗</button></h1>
     <div class="field"><span class="lbl">Akun</span><select id="acc"></select></div>
     <label id="turbowrap" class="row muted" style="font-size:12px;margin-bottom:8px"><input type="checkbox" id="turbo"/> Turbo (paralel multi-token)</label>
     <div id="pins" class="plist" style="display:none;margin-bottom:8px"></div>
@@ -435,6 +499,19 @@ mark.find{background:#e7b94e;color:#000;border-radius:2px}
       <input type="file" id="fileinput" multiple style="display:none"/>
       <div class="row" style="margin-top:8px"><button class="btn accent" id="send">Kirim</button><button class="btn" id="attach">📎 Lampirkan</button><button class="btn" id="clear">Bersihkan</button></div>
     </div>
+  </div>
+</div>
+<div id="setmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center">
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(520px,92vw);max-height:88vh;overflow:auto">
+    <h2 style="margin:0 0 4px;font-size:18px">⚙️ Pengaturan</h2>
+    <p class="muted" style="margin:0 0 14px;font-size:12px">Semua disimpan di Cloudflare KV. Deploy worker sekali via CMD, sisanya atur di sini.</p>
+    <div class="field"><span class="lbl">Notion Integration Tokens (satu per baris)</span><textarea id="settokens" rows="4" placeholder="ntn_xxx&#10;ntn_yyy"></textarea><span id="settokinfo" class="muted" style="font-size:11px"></span></div>
+    <div class="field"><span class="lbl">OpenAI API Key</span><input id="setkey" class="search" type="password" placeholder="sk-..."/></div>
+    <div class="field"><span class="lbl">OpenAI Base URL (opsional)</span><input id="setbase" class="search" placeholder="https://api.openai.com/v1"/></div>
+    <div class="field"><span class="lbl">Default Model (opsional)</span><input id="setmodel" class="search" placeholder="gpt-4o-mini"/></div>
+    <div class="field"><span class="lbl">Workers AI Model (opsional)</span><input id="setai" class="search" placeholder="@cf/meta/llama-3.1-8b-instruct"/></div>
+    <div id="setmsg" class="muted" style="font-size:12px;min-height:16px"></div>
+    <div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="setclose">Tutup</button><button class="btn accent" id="setsave">Simpan</button></div>
   </div>
 </div>
 <script>
@@ -487,84 +564,4 @@ function codeCard(b){var lang=(b.code&&b.code.language)||"plain text";var text=r
   var pre=el("pre");var code=el("code");code.textContent=text;pre.appendChild(code);card.appendChild(pre);
   var ta=el("textarea");ta.value=text;ta.style.display="none";card.appendChild(ta);
   try{code.className="language-"+lang;hljs.highlightElement(code)}catch(e){}
-  copy.onclick=function(){navigator.clipboard.writeText(ta.value);copy.textContent="Tersalin!";setTimeout(function(){copy.textContent="Copy"},1200)};
-  edit.onclick=function(){pre.style.display="none";ta.style.display="block";save.style.display="inline-flex";edit.style.display="none"};
-  dl.onclick=function(){var ext=EXT[sel.value]||"txt";downloadFile("snippet."+ext,ta.value)};
-  save.onclick=async function(){save.textContent="...";var r=await fetch("/api/block",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.id,type:"code",text:ta.value,language:sel.value,acc:$("acc").value})});var d=await r.json();save.textContent="Simpan";if(d.ok){b.code.rich_text=[{plain_text:ta.value}];b.code.language=sel.value;code.textContent=ta.value;code.className="language-"+sel.value;code.removeAttribute("data-highlighted");try{hljs.highlightElement(code)}catch(e){}pre.style.display="block";ta.style.display="none";save.style.display="none";edit.style.display="inline-flex"}else{alert(d.error||"Gagal simpan")}};
-  return card}
-
-function collectCode(){var out=[];function walk(arr){(arr||[]).forEach(function(b){if(b.type==="code")out.push({language:(b.code&&b.code.language)||"plain text",text:rtP(b.code&&b.code.rich_text)});if(b.children)walk(b.children)})}walk(state.blocks);return out}
-function downloadFile(name,content){var blob=new Blob([content],{type:"text/plain"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000)}
-async function exportZip(){var codes=collectCode();if(!codes.length){alert("Nggak ada code block di halaman ini");return}var zip=new JSZip();var n={};codes.forEach(function(c){var ext=EXT[c.language]||"txt";var base="snippet";n[ext]=(n[ext]||0)+1;zip.file(base+"-"+n[ext]+"."+ext,c.text)});var blob=await zip.generateAsync({type:"blob"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=(state.title||"notion-code")+".zip";a.click()}
-async function addCode(){if(!state.current){alert("Buka halaman dulu");return}var r=await fetch("/api/append",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pageId:state.current,language:"javascript",text:"// kode baru",acc:$("acc").value})});var d=await r.json();if(d.ok)openPage(state.current);else alert(d.error||"Gagal")}
-
-async function loadHistory(){try{var r=await fetch("/api/history");var d=await r.json();var sel=$("histsel");if(!sel)return;sel.innerHTML="";var o0=el("option","","— Riwayat chat —");o0.value="";sel.appendChild(o0);(d.sessions||[]).forEach(function(s){var o=el("option","",esc(s.title));o.value=s.id;sel.appendChild(o)});if(state.chatId)sel.value=state.chatId}catch(e){}}
-async function openChat(id){if(!id){newChat();return}try{var r=await fetch("/api/history?id="+encodeURIComponent(id));var d=await r.json();if(d.error){alert(d.error);return}state.chatId=d.id;state.chat=d.messages||[];if($("histsel"))$("histsel").value=d.id;history.pushState({},"","/chat/"+encodeURIComponent(d.id));renderChat()}catch(e){}}
-function newChat(){state.chat=[];state.chatId=null;if($("histsel"))$("histsel").value="";history.pushState({},"","/");renderChat()}
-async function saveHistory(){try{if(!state.chat.length)return;var fu=state.chat.filter(function(m){return m.role==="user"})[0];var title=fu?fu.content.slice(0,60):"Chat baru";var r=await fetch("/api/history/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:state.chatId,title:title,messages:state.chat})});var d=await r.json();if(d.ok&&d.id){var isNew=state.chatId!==d.id;state.chatId=d.id;if(isNew)history.replaceState({},"","/chat/"+encodeURIComponent(d.id));loadHistory()}}catch(e){}}
-async function delChat(){if(!state.chatId){newChat();return}if(!confirm("Hapus chat ini?"))return;try{await fetch("/api/history/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:state.chatId})})}catch(e){}newChat();loadHistory()}
-function extOf(n){var p=String(n).split(".");return p.length>1?p.pop().toLowerCase():""}
-function isImgType(t){return String(t).indexOf("image/")===0}
-var TEXTEXT=["js","ts","jsx","tsx","py","java","go","rs","c","cpp","h","css","html","md","txt","json","yml","yaml","sh","sql","rb","php","xml","csv"];
-var IMGEXT={png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",gif:"image/gif",webp:"image/webp",svg:"image/svg+xml"};
-function readFileObj(file){return new Promise(function(res){var ext=extOf(file.name);var img=isImgType(file.type)||IMGEXT[ext];var isText=String(file.type).indexOf("text/")===0||TEXTEXT.indexOf(ext)>=0;var fr=new FileReader();if(img){fr.onload=function(){res({name:file.name,type:file.type||IMGEXT[ext]||"image/png",size:file.size,dataUrl:fr.result})};fr.readAsDataURL(file)}else if(isText){fr.onload=function(){res({name:file.name,type:"text/plain",size:file.size,text:String(fr.result).slice(0,20000)})};fr.readAsText(file)}else{res({name:file.name,type:file.type,size:file.size})}})}
-async function handleZip(file){var out=[];try{var zip=await JSZip.loadAsync(file);var names=Object.keys(zip.files);for(var i=0;i<names.length;i++){var entry=zip.files[names[i]];if(entry.dir)continue;var ext=extOf(entry.name);if(IMGEXT[ext]){var b64=await entry.async("base64");out.push({name:entry.name,type:IMGEXT[ext],dataUrl:"data:"+IMGEXT[ext]+";base64,"+b64})}else{var txt=await entry.async("string");out.push({name:entry.name,type:"text/plain",text:String(txt).slice(0,20000)})}}}catch(e){out.push({name:file.name,type:file.type,size:file.size})}return out}
-async function addFiles(list){for(var i=0;i<list.length;i++){var f=list[i];if(extOf(f.name)==="zip"||String(f.type).indexOf("zip")>=0){var items=await handleZip(f);items.forEach(function(it){pending.push(it)})}else{var obj=await readFileObj(f);pending.push(obj)}}renderAttbar()}
-function renderAttbar(){var bar=$("attbar");if(!bar)return;bar.innerHTML="";pending.forEach(function(f,idx){var chip=el("div","att");var ic=(f.dataUrl&&isImgType(f.type))?"🖼️":((f.type&&f.type.indexOf("zip")>=0)?"🗜️":"📄");chip.appendChild(el("span","",ic+" "+esc(f.name)));var x=el("span","x","✕");x.onclick=function(){pending.splice(idx,1);renderAttbar()};chip.appendChild(x);bar.appendChild(chip)})}
-function filesHtml(files){var h="";var imgs=(files||[]).filter(function(f){return f.dataUrl&&isImgType(f.type)});var others=(files||[]).filter(function(f){return !(f.dataUrl&&isImgType(f.type))});if(imgs.length){h+='<div class="thumbs">';imgs.forEach(function(f){h+='<img src="'+esc(f.dataUrl)+'" title="'+esc(f.name)+'"/>'});h+="</div>"}others.forEach(function(f){h+='<div class="filechip">📄 '+esc(f.name)+"</div>"});return h}
-function collectCodeFromText(text){var parts=String(text).split(FENCE);var out=[];for(var i=1;i<parts.length;i+=2){var seg=parts[i];var nl=seg.indexOf("\n");var lang="plain text";var body=seg;if(nl>=0){var first=seg.slice(0,nl).trim();if(first)lang=first;body=seg.slice(nl+1)}out.push({language:lang,text:body})}return out}
-async function zipFromText(text,name){var codes=collectCodeFromText(text);if(!codes.length){alert("Nggak ada code block di jawaban ini");return}var zip=new JSZip();var n={};codes.forEach(function(c){var ext=EXT[c.language]||"txt";n[ext]=(n[ext]||0)+1;zip.file("file-"+n[ext]+"."+ext,c.text)});var blob=await zip.generateAsync({type:"blob"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=(name||"ai-output")+".zip";a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000)}
-function isZipCmd(t){t=String(t).toLowerCase();return t.indexOf("zip")>=0&&(t.indexOf("semua")>=0||t.indexOf("satu")>=0||t.indexOf("gabung")>=0||t.indexOf("jadiin")>=0||t.indexOf("jadikan")>=0||t.indexOf("download")>=0||t.indexOf("unduh")>=0)}
-async function zipAll(name){var codes=collectCode();state.chat.forEach(function(m){if(m.role==="assistant")collectCodeFromText(m.content).forEach(function(c){codes.push(c)})});if(!codes.length)return 0;var zip=new JSZip();var n={};codes.forEach(function(c){var ext=EXT[c.language]||"txt";n[ext]=(n[ext]||0)+1;zip.file("file-"+n[ext]+"."+ext,c.text)});var blob=await zip.generateAsync({type:"blob"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=(name||"semua-code")+".zip";a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000);return codes.length}
-function stripMemory(text){var idx=String(text).indexOf("::MEMORY::");if(idx<0)return {body:text,facts:[]};var rest=text.slice(idx+10).split("\n")[0];var facts=rest.split("||").map(function(s){return s.trim()}).filter(function(s){return s});return {body:text.slice(0,idx),facts:facts}}
-async function loadMemory(){try{var r=await fetch("/api/memory");var d=await r.json();state.memory=d.facts||[]}catch(e){state.memory=[]}}
-function saveMemory(facts){var cur=state.memory||[];facts.forEach(function(f){if(cur.indexOf(f)<0)cur.push(f)});cur=cur.slice(-50);state.memory=cur;try{fetch("/api/memory/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({facts:cur})})}catch(e){}}
-function showMemory(){var facts=state.memory||[];if(!facts.length){alert("Belum ada memori. AI bakal otomatis nyatet fakta penting pas ngobrol.");return}if(confirm("Memori AI saat ini:\n\n- "+facts.join("\n- ")+"\n\nKlik OK buat HAPUS semua memori, Cancel buat tutup.")){state.memory=[];try{fetch("/api/memory/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({facts:[]})})}catch(e){}alert("Memori dihapus.")}}
-function pushMsg(role,content,files){var m={role:role,content:content,files:files||[]};state.chat.push(m);renderChat();return m}
-function mdInline(s){s=esc(s);s=s.replace(new RegExp(BT+"([^"+BT+"]+)"+BT,"g"),"<code>$1</code>");s=s.replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");s=s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');return s}
-function mdBlock(text){var lines=text.split("\n");var html="";var inUl=false,inOl=false;function cl(){if(inUl){html+="</ul>";inUl=false}if(inOl){html+="</ol>";inOl=false}}for(var i=0;i<lines.length;i++){var t=lines[i].trim();if(!t){cl();continue}var h=t.match(/^(#{1,4})\s+(.*)$/);if(h){cl();var lv=h[1].length+1;if(lv>4)lv=4;html+="<h"+lv+">"+mdInline(h[2])+"</h"+lv+">";continue}var ul=t.match(/^[-*]\s+(.*)$/);if(ul){if(!inUl){cl();html+="<ul>";inUl=true}html+="<li>"+mdInline(ul[1])+"</li>";continue}var ol=t.match(/^\d+\.\s+(.*)$/);if(ol){if(!inOl){cl();html+="<ol>";inOl=true}html+="<li>"+mdInline(ol[1])+"</li>";continue}cl();html+="<div>"+mdInline(t)+"</div>"}cl();return html}
-function mdRender(text){var parts=String(text).split(FENCE);var out="";for(var i=0;i<parts.length;i++){if(i%2===1){var seg=parts[i];var nl=seg.indexOf("\n");var lang="";if(nl>=0){lang=seg.slice(0,nl).trim();seg=seg.slice(nl+1)}out+='<pre><code'+(lang?' class="language-'+lang+'"':"")+'>'+esc(seg)+"</code></pre>"}else{out+=mdBlock(parts[i])}}return out}
-function parseOpts(text){var idx=String(text).indexOf("::OPTIONS::");if(idx<0)return {body:text,opts:[]};var body=text.slice(0,idx);var line=text.slice(idx+11).split("\n")[0];var opts=line.split("||").map(function(s){return s.trim()}).filter(function(s){return s}).slice(0,4);return {body:body,opts:opts}}
-function renderChat(){var c=$("msgs");c.innerHTML="";state.chat.forEach(function(m,i){var d=el("div","msg "+m.role);d.appendChild(el("div","role",m.role==="user"?"Kamu":"AI"));if(editing===i){var ta=el("textarea");ta.value=m.content;ta.rows=3;d.appendChild(ta);var br=el("div","row");br.style.marginTop="6px";var sv=el("button","btn accent","Simpan & generate");var cn=el("button","btn","Batal");br.appendChild(sv);br.appendChild(cn);d.appendChild(br);sv.onclick=function(){saveEdit(i,ta.value)};cn.onclick=function(){editing=-1;renderChat()};c.appendChild(d);return}var pr=m.role==="assistant"?parseOpts(stripMemory(m.content).body):{body:m.content,opts:[]};if(pr.body.trim()||m.role==="assistant"){var bub=el("div","bubble",mdRender(pr.body));d.appendChild(bub);try{bub.querySelectorAll("pre code").forEach(function(cb){hljs.highlightElement(cb)})}catch(e){}}if(m.files&&m.files.length){var fh=el("div");fh.innerHTML=filesHtml(m.files);d.appendChild(fh)}if(pr.opts.length){var ob=el("div","opts");pr.opts.forEach(function(op){var chip=el("button","chip",esc(op));chip.onclick=function(){$("chatin").value=op;sendChat()};ob.appendChild(chip)});d.appendChild(ob)}var act=el("div","msgact");if(m.role==="user"){var eb=el("button","mini","✏️ Edit");eb.onclick=function(){editing=i;renderChat()};act.appendChild(eb)}if(m.role==="assistant"){if(collectCodeFromText(m.content).length){var zb=el("button","mini","📦 ZIP");zb.onclick=function(){zipFromText(m.content,"ai-output")};act.appendChild(zb)}if(i===state.chat.length-1){var rb=el("button","mini","🔄 Ulangi");rb.onclick=function(){regenerateFrom(i)};act.appendChild(rb)}}d.appendChild(act);c.appendChild(d)});c.scrollTop=c.scrollHeight}
-async function sendChat(){var inp=$("chatin");var text=inp.value.trim();if(!text&&!pending.length)return;inp.value="";if(text&&!pending.length&&isZipCmd(text)){pushMsg("user",text);var cnt=await zipAll(state.title||"semua-code");pushMsg("assistant",cnt?("📦 Oke! "+cnt+" code block aku gabung jadi satu file ZIP dan udah ke-download ya."):"Hmm, aku nggak nemu code block di halaman ini atau di chat buat di-zip.");saveHistory();return}var files=pending;pending=[];renderAttbar();pushMsg("user",text,files);streamReply()}
-function saveEdit(i,txt){txt=(txt||"").trim();if(!txt){editing=-1;renderChat();return}state.chat[i].content=txt;state.chat=state.chat.slice(0,i+1);editing=-1;renderChat();streamReply()}
-function regenerateFrom(i){if(i<=0)return;state.chat=state.chat.slice(0,i);renderChat();streamReply()}
-async function streamReply(){var msgs=state.chat.map(function(m){var txt=m.content;(m.files||[]).forEach(function(f){if(f.text)txt+="\n\n[File: "+f.name+"]\n"+f.text});var imgs=(m.files||[]).filter(function(f){return f.dataUrl&&isImgType(f.type)});if(imgs.length){var arr=[{type:"text",text:txt}];imgs.forEach(function(f){arr.push({type:"image_url",image_url:{url:f.dataUrl}})});return {role:m.role,content:arr}}return {role:m.role,content:txt}});if($("ctx").checked&&state.current){var code=collectCode().map(function(c){return "// "+c.language+"\n"+c.text}).join("\n\n");if(code)msgs.unshift({role:"system",content:"Kamu asisten coding berbahasa Indonesia. Konteks kode dari halaman Notion aktif:\n"+code.slice(0,8000)})}if(state.memory&&state.memory.length)msgs.unshift({role:"system",content:"Memori jangka panjang tentang user (selalu pertimbangkan):\n- "+state.memory.join("\n- ")});msgs.unshift({role:"system",content:"Kamu asisten coding berbahasa Indonesia. Kalau relevan, akhiri jawaban dengan SATU baris opsi pilihan biar user gampang milih, format persis: ::OPTIONS:: Pilihan A || Pilihan B || Pilihan C (maksimal 4 opsi, masing-masing singkat). Jangan pakai format ini kalau nggak perlu. Kalau kamu menangkap fakta/preferensi penting & tahan lama soal user (mis. bahasa/framework favorit, nama project, gaya koding), tambahin di baris TERPISAH paling akhir, format persis: ::MEMORY:: fakta1 || fakta2 (cuma fakta baru yang penting; jangan ulang yang udah diketahui; jangan tampilin kalau nggak ada)."});var asst=pushMsg("assistant","");var ctrl=new AbortController();window.__ctrl=ctrl;$("send").textContent="Stop";try{var res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,model:($("model").value||"").trim()||undefined}),signal:ctrl.signal});if(!res.ok||!res.body){var er=await res.json().catch(function(){return{}});asst.content="[Error] "+(er.error||res.status);renderChat();return}var reader=res.body.getReader();var dec=new TextDecoder();var buf="";var acc="";while(true){var rr=await reader.read();if(rr.done)break;buf+=dec.decode(rr.value,{stream:true});var lines=buf.split("\n");buf=lines.pop();for(var i=0;i<lines.length;i++){var line=lines[i].trim();if(!line||line.indexOf("data:")!==0)continue;var payload=line.slice(5).trim();if(payload==="[DONE]")continue;try{var j=JSON.parse(payload);var delta=(j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content)||j.response||"";if(delta){acc+=delta;asst.content=acc;renderChat()}}catch(e){}}}}catch(e){if(e.name!=="AbortError"){asst.content="[Error] "+e.message;renderChat()}}finally{window.__ctrl=null;$("send").textContent="Kirim";var sm=stripMemory(asst.content);asst.content=sm.body;if(sm.facts.length)saveMemory(sm.facts);renderChat();saveHistory()}}
-
-function getPins(){try{return JSON.parse(localStorage.getItem("pins")||"[]")}catch(e){return[]}}
-function setPins(p){localStorage.setItem("pins",JSON.stringify(p))}
-function isPinned(id){return getPins().some(function(p){return p.id===id})}
-function renderPins(){var box=$("pins");if(!box)return;var pins=getPins();box.innerHTML="";if(!pins.length){box.style.display="none";return}box.style.display="block";pins.forEach(function(p){var it=el("div","pitem"+(state.current===p.id?" active":""),"📌 "+esc(p.title));it.onclick=function(){openPage(p.id)};box.appendChild(it)})}
-function updatePinBtn(){var b=$("pinbtn");if(b)b.textContent=isPinned(state.current)?"📌 Unpin":"📌 Pin"}
-function togglePin(){if(!state.current)return;var pins=getPins();if(isPinned(state.current)){pins=pins.filter(function(p){return p.id!==state.current})}else{pins.push({id:state.current,title:state.title})}setPins(pins);renderPins();updatePinBtn()}
-function applyTheme(){if((localStorage.getItem("theme")||"dark")==="light")document.body.classList.add("light");else document.body.classList.remove("light")}
-function toggleTheme(){localStorage.setItem("theme",(localStorage.getItem("theme")==="light")?"dark":"light");applyTheme()}
-function hiText(text,term){var lo=text.toLowerCase(),t=term.toLowerCase(),out="",i=0,idx;while((idx=lo.indexOf(t,i))>=0){out+=esc(text.slice(i,idx))+'<mark class="find">'+esc(text.slice(idx,idx+term.length))+"</mark>";i=idx+term.length}out+=esc(text.slice(i));return out}
-function findInPage(term){if(!state.blocks.length)return;renderPage();if(!term)return;var page=$("page");var walker=document.createTreeWalker(page,NodeFilter.SHOW_TEXT,null);var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);var t=term.toLowerCase(),first=null;nodes.forEach(function(n){var v=n.nodeValue;if(v&&v.toLowerCase().indexOf(t)>=0){var span=document.createElement("span");span.innerHTML=hiText(v,term);n.parentNode.replaceChild(span,n);if(!first)first=span.querySelector("mark")}});if(first)first.scrollIntoView({block:"center"})}
-$("search").addEventListener("input",function(){clearTimeout(window.__st);window.__st=setTimeout(doSearch,300)});
-$("acc").addEventListener("change",doSearch);
-$("refresh").onclick=function(){if(state.current)openPage(state.current);else doSearch()};
-$("zip").onclick=exportZip;
-$("addcode").onclick=addCode;
-$("send").onclick=function(){if(window.__ctrl){window.__ctrl.abort()}else{sendChat()}};
-$("clear").onclick=function(){state.chat=[];pending=[];renderAttbar();renderChat()};
-$("histsel").addEventListener("change",function(){openChat(this.value)});
-$("newchat").onclick=newChat;
-$("delchat").onclick=delChat;
-$("membtn").onclick=showMemory;
-$("pinbtn").onclick=togglePin;
-$("theme").onclick=toggleTheme;
-$("find").addEventListener("input",function(){var v=this.value.trim();clearTimeout(window.__ft);window.__ft=setTimeout(function(){findInPage(v)},250)});
-applyTheme();renderPins();
-$("chatin").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChat()}});
-$("attach").onclick=function(){$("fileinput").click()};
-$("fileinput").addEventListener("change",function(){if(this.files&&this.files.length)addFiles(this.files);this.value=""});
-$("chatin").addEventListener("paste",function(e){var items=(e.clipboardData&&e.clipboardData.items)||[];var fs=[];for(var i=0;i<items.length;i++){if(items[i].kind==="file"){var f=items[i].getAsFile();if(f)fs.push(f)}}if(fs.length){e.preventDefault();addFiles(fs)}});
-loadAccounts().then(doSearch);
-loadHistory();
-loadMemory();
-function routeFromUrl(){var m=location.pathname.match(/^\/chat\/(.+)$/);if(m){var id=decodeURIComponent(m[1]);fetch("/api/history?id="+encodeURIComponent(id)).then(function(r){return r.json()}).then(function(d){if(d&&!d.error){state.chatId=d.id;state.chat=d.messages||[];if($("histsel"))$("histsel").value=d.id;renderChat()}})}}
-window.addEventListener("popstate",routeFromUrl);
-routeFromUrl();
-</script>
-</body></html>`;
+  copy.onclick=function(){navigator.clipboard

@@ -1,41 +1,45 @@
 # Notion Coding Web — Cloudflare Worker (Multi-akun)
 
-Single-file Cloudflare Worker buat "jalanin" Notion di web sendiri yang fokus koding: viewer rapi buat code block, editor buat ubah/simpan code balik ke Notion, export ke file/ZIP, search & navigasi halaman, plus panel chat AI ala ChatGPT. Autentikasi pakai **official Notion API**, dan support **banyak akun/token** sekaligus + mode Turbo (paralel multi-token).
+Single-file Cloudflare Worker buat "jalanin" Notion di web sendiri yang fokus koding: viewer rapi buat code block, editor buat ubah/simpan code balik ke Notion, export ke file/ZIP, search & navigasi halaman, plus panel chat AI ala ChatGPT. Autentikasi pakai **official Notion API**, support **banyak akun/token** sekaligus + mode Turbo.
 
-## Fitur
-- Viewer & editor code block (simpan balik ke Notion via API)
-- Export semua code block ke file / ZIP
-- Search & navigasi halaman, pin/favorit
-- Chat AI (OpenAI-compatible / Cloudflare Workers AI): streaming, stop, render markdown lengkap
-- Riwayat chat per-sesi + URL per chat (disimpan di Cloudflare KV)
-- Memori jangka panjang (AI auto-inget fakta penting lintas chat)
-- Lampiran file/foto/ZIP ke chat, perintah "zip semua code"
-- Multi-akun + mode Turbo, light/dark theme
+## Setup (cukup 1x lewat CMD, sisanya di web)
+Deploy worker-nya sekali pakai Wrangler, lalu **semua setting (token Notion, OpenAI key, model) diatur langsung dari tombol ⚙️ Pengaturan di web** — disimpan di Cloudflare KV.
 
-## Setup
-1. Buka https://www.notion.so/my-integrations -> bikin satu integration per akun -> salin tiap Internal Integration Token.
-2. Di tiap halaman yang mau diakses: **...** -> **Connections** -> tambahkan integration terkait. (Buat Turbo: share halaman yang sama ke semua integration.)
-3. Set secret & deploy (lihat bawah).
-
-## Set secrets & deploy
+### 1. Deploy (sekali aja)
 ```bash
-# beberapa token sekaligus (dipisah koma):
-wrangler secret put NOTION_TOKENS   # contoh: ntn_aaa,ntn_bbb,ntn_ccc
-# atau satu per satu: NOTION_TOKEN_1, NOTION_TOKEN_2, ... (NOTION_TOKEN tunggal juga didukung)
-
-# opsional, buat chat AI (OpenAI / Groq / OpenRouter):
-wrangler secret put OPENAI_API_KEY
-#   OPENAI_BASE_URL  contoh: https://api.groq.com/openai/v1
-#   OPENAI_MODEL     contoh: gpt-4o-mini / llama-3.3-70b-versatile
-
-# bikin KV namespace buat riwayat chat + memori, tempel id-nya ke wrangler.toml:
+# bikin KV namespace buat riwayat chat, memori, & setting:
 wrangler kv namespace create CHAT
-
+# tempel id hasilnya ke wrangler.toml, lalu:
 wrangler deploy
 ```
 
-## Environment variables
-- `NOTION_TOKENS` / `NOTION_TOKEN_1..9` / `NOTION_TOKEN` — token integration Notion
-- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` — chat AI (OpenAI-compatible)
-- binding `AI` (opsional) — Cloudflare Workers AI sebagai ganti OpenAI eksternal
-- KV binding `CHAT` — wajib buat riwayat chat & memori
+### 2. Atur semuanya di web
+Buka URL worker-mu -> klik **⚙️ Pengaturan** -> isi:
+- **Notion Integration Tokens** (satu per baris) — ambil dari https://www.notion.so/my-integrations
+- **OpenAI API Key** (opsional, buat chat AI) + Base URL + Default model
+- **Workers AI Model** (opsional)
+
+Klik **Simpan**. Selesai — nggak perlu `wrangler secret put` lagi.
+
+> Tetap share tiap halaman Notion ke integration terkait (**...** -> **Connections**) biar kebaca. Buat Turbo: share halaman yang sama ke semua integration.
+
+## Fitur
+- Viewer & editor code block (simpan balik ke Notion via API)
+- Export semua code block ke file / ZIP, plus perintah chat "zip semua code"
+- Search & navigasi halaman, pin/favorit, cari teks di halaman
+- Chat AI (OpenAI-compatible / Cloudflare Workers AI): streaming, stop, render markdown lengkap, opsi pilihan klik
+- Riwayat chat per-sesi + URL per chat (Cloudflare KV)
+- Memori jangka panjang (AI auto-inget fakta penting lintas chat)
+- Lampiran file/foto/ZIP ke chat
+- Setup via web (⚙️) — token & API key diatur di browser, disimpan di KV
+- Multi-akun + mode Turbo, light/dark theme
+
+## Env vars (opsional — fallback)
+Masih bisa pakai secret via CMD sebagai fallback (setting dari web/KV diprioritaskan di atas env):
+- `NOTION_TOKENS` / `NOTION_TOKEN_1..9` / `NOTION_TOKEN`
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`
+- binding `AI` (Workers AI)
+- KV binding `CHAT` (**wajib** — dipakai buat riwayat chat, memori, & setting)
+
+## Catatan keamanan
+Panel Pengaturan & API-nya nggak punya login. Token cuma dipakai di sisi server dan `/api/settings` cuma balikin versi ter-mask, tapi siapa pun yang tau URL worker bisa ngubah setting. Buat dipakai sendiri ini oke; kalau mau lebih aman, lindungi worker pakai Cloudflare Access.
