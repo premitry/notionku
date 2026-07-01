@@ -1,4 +1,5 @@
 import { CLIENT_JS } from "./client.js";
+import { FEATURES_JS } from "./features.js";
 
 const SHELL_HEAD = `<!DOCTYPE html>
 <html lang="id"><head>
@@ -122,4 +123,4 @@ const TAIL = `
 <\/script>
 </body></html>`;
 
-export const PAGE_HTML = SHELL_HEAD + SCRIPT_OPEN + CLIENT_JS + TAIL;
+export const PAGE_HTML = SHELL_HEAD + SCRIPT_OPEN + CLIENT_JS + "\n</script>\n<script>\n" + FEATURES_JS + TAIL;

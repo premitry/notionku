@@ -1,4 +1,5 @@
-export const CLIENT_JS = `var BT=String.fromCharCode(96);var FENCE=BT+BT+BT;
+function __clientMain(){
+var BT=String.fromCharCode(96);var FENCE=BT+BT+BT;
 function $(i){return document.getElementById(i)}
 function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e}
@@ -116,4 +117,6 @@ updateBackdrop();
 loadAccounts().then(doSearch);
 loadModels();loadHistory();loadMemory();renderChat();routeFromUrl();
 window.addEventListener("resize",updateBackdrop);
-window.addEventListener("popstate",routeFromUrl);`;
+window.addEventListener("popstate",routeFromUrl);
+}
+export const CLIENT_JS = (function(){var s=__clientMain.toString();return s.slice(s.indexOf("{")+1,s.lastIndexOf("}"));})();
