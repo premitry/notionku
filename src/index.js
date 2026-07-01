@@ -1,0 +1,209 @@
+import { PAGE_HTML } from "./ui.js";
+const NOTION_VERSION = "2022-06-28";
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const p = url.pathname;
+    try {
+      if (p === "/") return htmlResponse();
+      if (p === "/api/accounts") return apiAccounts(env);
+      if (p === "/api/search") return apiSearch(request, env);
+      if (p === "/api/page") return apiPage(request, env);
+      if (p === "/api/block") return apiUpdateBlock(request, env);
+      if (p === "/api/append") return apiAppend(request, env);
+      if (p === "/api/chat") return apiChat(request, env);
+      if (p === "/api/models") return apiModels(request, env);
+      if (p === "/api/history") return apiHistory(request, env);
+      if (p === "/api/history/save") return apiHistorySave(request, env);
+      if (p === "/api/history/rename") return apiHistoryRename(request, env);
+      if (p === "/api/history/delete") return apiHistoryDelete(request, env);
+      if (p === "/api/memory") return apiMemory(request, env);
+      if (p === "/api/memory/save") return apiMemorySave(request, env);
+      if (p === "/api/settings") return apiSettings(request, env);
+      if (p === "/api/settings/save") return apiSettingsSave(request, env);
+      if (p === "/api/gh/tree") return apiGhTree(request, env);
+      if (p === "/api/gh/file") return apiGhFile(request, env);
+      if (p === "/api/gh/commit") return apiGhCommit(request, env);
+      if (p.startsWith("/api/")) return json({ error: "Not found" }, 404);
+      return htmlResponse();
+    } catch (e) { return json({ error: String((e && e.message) || e) }, 500); }
+  },
+};
+function json(o, s) { return new Response(JSON.stringify(o), { status: s || 200, headers: { "content-type": "application/json; charset=utf-8" } }); }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function getConfig(env) {
+  const cfg = { tokens: [], openai_key: "", openai_base: "", openai_model: "", ai_model: "", gh_token: "", gh_owner: "", gh_repo: "", gh_branch: "" };
+  if (env.CHAT) { const s = await env.CHAT.get("config", "json"); if (s) { cfg.tokens = s.tokens || []; cfg.openai_key = s.openai_key || ""; cfg.openai_base = s.openai_base || ""; cfg.openai_model = s.openai_model || ""; cfg.ai_model = s.ai_model || ""; cfg.gh_token = s.gh_token || ""; cfg.gh_owner = s.gh_owner || ""; cfg.gh_repo = s.gh_repo || ""; cfg.gh_branch = s.gh_branch || ""; } }
+  return cfg;
+}
+async function getTokens(env) {
+  const set = []; const cfg = await getConfig(env);
+  cfg.tokens.forEach((t) => { const v = String(t).trim(); if (v) set.push(v); });
+  if (env.NOTION_TOKENS) env.NOTION_TOKENS.split(",").forEach((t) => { const v = t.trim(); if (v) set.push(v); });
+  for (let i = 1; i <= 9; i++) { const v = env["NOTION_TOKEN_" + i]; if (v) set.push(String(v).trim()); }
+  if (env.NOTION_TOKEN) set.push(String(env.NOTION_TOKEN).trim());
+  const u = []; set.forEach((t) => { if (u.indexOf(t) < 0) u.push(t); });
+  if (!u.length) throw new Error("Belum ada token Notion. Buka Pengaturan (gear) di web buat nambahin.");
+  return u;
+}
+async function resolveTokens(env, acc, turbo) { const all = await getTokens(env); if (turbo || acc === "auto") return all; const i = parseInt(acc || "0", 10) || 0; return [all[i] || all[0]]; }
+async function notion(env, endpoint, init, token) {
+  init = init || {};
+  for (let a = 0; a < 4; a++) {
+    const res = await fetch("https://api.notion.com/v1" + endpoint, { method: init.method || "GET", headers: { Authorization: "Bearer " + token, "Notion-Version": NOTION_VERSION, "Content-Type": "application/json" }, body: init.body });
+    if (res.status === 429) { const ra = parseFloat(res.headers.get("Retry-After") || "1"); await sleep((ra || 1) * 1000); continue; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || ("Notion error " + res.status));
+    return data;
+  }
+  throw new Error("Notion rate limited (429)");
+}
+async function notionMulti(env, endpoint, init, tokens) { let last; for (let t = 0; t < tokens.length; t++) { try { return await notion(env, endpoint, init, tokens[t]); } catch (e) { last = e; } } throw last || new Error("Semua token gagal"); }
+function rtPlain(rt) { return (rt || []).map((t) => t.plain_text || "").join(""); }
+function pageTitle(p) { const pr = p.properties || {}; for (const k in pr) { if (pr[k] && pr[k].type === "title") return rtPlain(pr[k].title) || "Untitled"; } return "Untitled"; }
+async function apiAccounts(env) {
+  const tokens = await getTokens(env);
+  const accounts = await Promise.all(tokens.map(async (tk, i) => { try { const me = await notion(env, "/users/me", {}, tk); const name = (me.bot && me.bot.workspace_name) || me.name || ("Akun " + (i + 1)); return { index: i, name }; } catch (e) { return { index: i, name: "Akun " + (i + 1) + " (token invalid)" }; } }));
+  return json({ accounts });
+}
+async function apiSearch(request, env) {
+  const u = new URL(request.url); const q = u.searchParams.get("q") || ""; const acc = u.searchParams.get("acc"); const all = await getTokens(env);
+  const body = JSON.stringify({ query: q, page_size: 50, filter: { property: "object", value: "page" }, sort: { direction: "descending", timestamp: "last_edited_time" } });
+  let raw = [];
+  if (acc === "auto" && all.length > 1) {
+    const lists = await Promise.all(all.map((t) => notion(env, "/search", { method: "POST", body }, t).then((d) => d.results || []).catch(() => [])));
+    const seen = {}; lists.forEach((arr) => arr.forEach((p) => { if (!seen[p.id]) { seen[p.id] = 1; raw.push(p); } }));
+    raw.sort((a, b) => new Date(b.last_edited_time) - new Date(a.last_edited_time));
+  } else { const i = parseInt(acc || "0", 10) || 0; const d = await notionMulti(env, "/search", { method: "POST", body }, [all[i] || all[0]]); raw = d.results || []; }
+  return json({ results: raw.slice(0, 80).map((p) => ({ id: p.id, title: pageTitle(p), last_edited: p.last_edited_time })) });
+}
+async function fetchBlocks(env, blockId, tokens, ref) {
+  let blocks = []; let cursor = null;
+  do {
+    const start = ref.i % tokens.length; ref.i++; const order = tokens.slice(start).concat(tokens.slice(0, start));
+    const qs = cursor ? "?start_cursor=" + cursor + "&page_size=100" : "?page_size=100";
+    const data = await notionMulti(env, "/blocks/" + blockId + "/children" + qs, {}, order);
+    for (const b of data.results || []) blocks.push(b);
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor);
+  const wk = blocks.filter((b) => b.has_children && b.type !== "child_page" && b.type !== "child_database");
+  await Promise.all(wk.map((b) => fetchBlocks(env, b.id, tokens, ref).then((c) => { b.children = c; })));
+  return blocks;
+}
+async function apiPage(request, env) {
+  const u = new URL(request.url); const id = u.searchParams.get("id"); if (!id) return json({ error: "id wajib" }, 400);
+  const turbo = u.searchParams.get("turbo") === "1"; const tokens = await resolveTokens(env, u.searchParams.get("acc"), turbo); const ref = { i: 0 };
+  const page = await notionMulti(env, "/pages/" + id, {}, tokens); const blocks = await fetchBlocks(env, id, tokens, ref);
+  return json({ id, title: pageTitle(page), blocks });
+}
+async function apiUpdateBlock(request, env) {
+  const body = await request.json(); const tokens = await resolveTokens(env, body.acc, false); const type = body.type || "code"; const payload = {};
+  payload[type] = { rich_text: [{ type: "text", text: { content: body.text || "" } }] };
+  if (type === "code" && body.language) payload[type].language = body.language;
+  const data = await notionMulti(env, "/blocks/" + body.id, { method: "PATCH", body: JSON.stringify(payload) }, tokens);
+  return json({ ok: true, block: data });
+}
+async function apiAppend(request, env) {
+  const body = await request.json(); const tokens = await resolveTokens(env, body.acc, false);
+  const data = await notionMulti(env, "/blocks/" + body.pageId + "/children", { method: "PATCH", body: JSON.stringify({ children: [{ object: "block", type: "code", code: { rich_text: [{ type: "text", text: { content: body.text || "" } }], language: body.language || "plain text" } }] }) }, tokens);
+  return json({ ok: true, result: data });
+}
+async function apiChat(request, env) {
+  const body = await request.json(); const messages = body.messages || []; const cfg = await getConfig(env); const key = cfg.openai_key || env.OPENAI_API_KEY;
+  if (!key && env.AI) { const stream = await env.AI.run(body.model || cfg.ai_model || env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct", { messages, stream: true }); return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } }); }
+  if (!key) return json({ error: "OpenAI API Key belum di-set. Buka Pengaturan di web." }, 400);
+  const base = cfg.openai_base || env.OPENAI_BASE_URL || "https://api.openai.com/v1"; const model = body.model || cfg.openai_model || env.OPENAI_MODEL || "gpt-4o-mini";
+  const res = await fetch(base + "/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, stream: true }) });
+  if (!res.ok) { const t = await res.text(); return json({ error: "LLM error: " + t }, 500); }
+  return new Response(res.body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+}
+async function apiModels(request, env) {
+  const cfg = await getConfig(env); const key = cfg.openai_key || env.OPENAI_API_KEY;
+  if (!key) return json({ models: ["@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/qwen/qwen2.5-coder-32b-instruct", "@cf/deepseek-ai/deepseek-coder-6.7b-instruct-awq"], source: "workers-ai" });
+  const base = cfg.openai_base || env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  try { const res = await fetch(base + "/models", { headers: { Authorization: "Bearer " + key } }); if (!res.ok) return json({ models: [], error: "HTTP " + res.status }); const d = await res.json(); const arr = d.data || d.models || []; const models = arr.map((m) => (typeof m === "string" ? m : m.id || m.name)).filter(Boolean).sort(); return json({ models }); } catch (e) { return json({ models: [], error: String((e && e.message) || e) }); }
+}
+async function readIndex(env) { if (!env.CHAT) return []; return (await env.CHAT.get("index", "json")) || []; }
+async function apiHistory(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const u = new URL(request.url); const id = u.searchParams.get("id");
+  if (id) { const s = await env.CHAT.get("session:" + id, "json"); if (!s) return json({ error: "Sesi nggak ketemu" }, 404); return json(s); }
+  const index = await readIndex(env); index.sort((a, b) => (b.updated || 0) - (a.updated || 0)); return json({ sessions: index });
+}
+async function apiHistorySave(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const body = await request.json(); const id = body.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
+  let title = (body.title || "").slice(0, 80);
+  if (!title && body.id) { const prev = await env.CHAT.get("session:" + body.id, "json"); if (prev && prev.title) title = prev.title; }
+  if (!title) title = "Chat baru"; const updated = Date.now();
+  await env.CHAT.put("session:" + id, JSON.stringify({ id, title, updated, messages: body.messages || [] }));
+  let index = await readIndex(env); index = index.filter((s) => s.id !== id); index.push({ id, title, updated }); await env.CHAT.put("index", JSON.stringify(index));
+  return json({ ok: true, id, title, updated });
+}
+async function apiHistoryRename(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const body = await request.json(); const title = (body.title || "Chat").slice(0, 80);
+  const s = await env.CHAT.get("session:" + body.id, "json"); if (s) { s.title = title; await env.CHAT.put("session:" + body.id, JSON.stringify(s)); }
+  let index = await readIndex(env); index = index.map((x) => (x.id === body.id ? { id: x.id, title, updated: x.updated } : x)); await env.CHAT.put("index", JSON.stringify(index));
+  return json({ ok: true });
+}
+async function apiHistoryDelete(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const body = await request.json(); await env.CHAT.delete("session:" + body.id);
+  let index = await readIndex(env); index = index.filter((s) => s.id !== body.id); await env.CHAT.put("index", JSON.stringify(index));
+  return json({ ok: true });
+}
+async function apiMemory(request, env) { if (!env.CHAT) return json({ facts: [] }); return json({ facts: (await env.CHAT.get("memory:facts", "json")) || [] }); }
+async function apiMemorySave(request, env) { if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400); const body = await request.json(); const facts = (body.facts || []).slice(0, 100); await env.CHAT.put("memory:facts", JSON.stringify(facts)); return json({ ok: true, facts }); }
+function maskTok(t) { t = String(t); return t.length <= 10 ? "****" : t.slice(0, 6) + "..." + t.slice(-4); }
+async function apiSettings(request, env) { if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set. Deploy dengan KV namespace dulu." }, 400); const cfg = await getConfig(env); return json({ tokens: cfg.tokens.map(maskTok), openai_key_set: !!cfg.openai_key, openai_base: cfg.openai_base, openai_model: cfg.openai_model, ai_model: cfg.ai_model, gh_token_set: !!cfg.gh_token, gh_owner: cfg.gh_owner, gh_repo: cfg.gh_repo, gh_branch: cfg.gh_branch }); }
+async function apiSettingsSave(request, env) {
+  if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
+  const body = await request.json(); const cur = await getConfig(env); let tokens = cur.tokens;
+  if (Array.isArray(body.tokens)) tokens = body.tokens.map((t) => String(t).trim()).filter((t) => t);
+  let key = cur.openai_key; if (typeof body.openai_key === "string" && body.openai_key.trim()) key = body.openai_key.trim(); if (body.clear_openai_key) key = "";
+  let gh = cur.gh_token; if (typeof body.gh_token === "string" && body.gh_token.trim()) gh = body.gh_token.trim(); if (body.clear_gh_token) gh = "";
+  const gho = typeof body.gh_owner === "string" ? body.gh_owner.trim() : (cur.gh_owner || "");
+  const ghr = typeof body.gh_repo === "string" ? body.gh_repo.trim() : (cur.gh_repo || "");
+  const ghb = typeof body.gh_branch === "string" ? body.gh_branch.trim() : (cur.gh_branch || "");
+  await env.CHAT.put("config", JSON.stringify({ tokens, openai_key: key, openai_base: (body.openai_base || "").trim(), openai_model: (body.openai_model || "").trim(), ai_model: (body.ai_model || "").trim(), gh_token: gh, gh_owner: gho, gh_repo: ghr, gh_branch: ghb }));
+  return json({ ok: true, tokenCount: tokens.length });
+}
+function b64encode(str) { const bytes = new TextEncoder().encode(str); let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
+function b64decode(b64) { const bin = atob(String(b64).replace(/\n/g, "")); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return new TextDecoder().decode(bytes); }
+async function ghApi(env, path, init) {
+  const cfg = await getConfig(env); if (!cfg.gh_token) throw new Error("GitHub token belum di-set. Buka Pengaturan.");
+  init = init || {};
+  const res = await fetch("https://api.github.com" + path, { method: init.method || "GET", headers: { Authorization: "Bearer " + cfg.gh_token, Accept: "application/vnd.github+json", "User-Agent": "notionku-worker", "Content-Type": "application/json" }, body: init.body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data && data.message) || ("GitHub error " + res.status));
+  return data;
+}
+function ghPath(p) { return String(p).split("/").map(encodeURIComponent).join("/"); }
+async function ghRepo(env) { const cfg = await getConfig(env); if (!cfg.gh_owner || !cfg.gh_repo) throw new Error("Owner/repo GitHub belum di-set di Pengaturan."); return { owner: cfg.gh_owner, repo: cfg.gh_repo, branch: cfg.gh_branch || "main" }; }
+async function apiGhTree(request, env) {
+  const r = await ghRepo(env);
+  const data = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/git/trees/" + encodeURIComponent(r.branch) + "?recursive=1");
+  const files = (data.tree || []).filter((t) => t.type === "blob").map((t) => ({ path: t.path, sha: t.sha }));
+  return json({ files, repo: r.owner + "/" + r.repo, branch: r.branch });
+}
+async function apiGhFile(request, env) {
+  const u = new URL(request.url); const path = u.searchParams.get("path"); if (!path) return json({ error: "path wajib" }, 400);
+  const r = await ghRepo(env);
+  const data = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/contents/" + ghPath(path) + "?ref=" + encodeURIComponent(r.branch));
+  let content = ""; if (data.content) { try { content = b64decode(data.content); } catch (e) { content = ""; } }
+  return json({ path, sha: data.sha, content });
+}
+async function apiGhCommit(request, env) {
+  const body = await request.json(); const files = body.files || []; if (!files.length) return json({ error: "Nggak ada file buat di-commit" }, 400);
+  const r = await ghRepo(env); const results = [];
+  for (const f of files) {
+    let sha = f.sha;
+    if (!sha) { try { const cur = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/contents/" + ghPath(f.path) + "?ref=" + encodeURIComponent(r.branch)); sha = cur.sha; } catch (e) {} }
+    const payload = { message: body.message || ("Update " + f.path + " via notionku"), content: b64encode(f.content || ""), branch: r.branch }; if (sha) payload.sha = sha;
+    try { const res = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/contents/" + ghPath(f.path), { method: "PUT", body: JSON.stringify(payload) }); results.push({ path: f.path, ok: true, url: (res.content && res.content.html_url) || "" }); } catch (e) { results.push({ path: f.path, ok: false, error: String((e && e.message) || e) }); }
+  }
+  return json({ results });
+}
+
+function htmlResponse() { return new Response(PAGE_HTML, { headers: { "content-type": "text/html; charset=utf-8" } }); }
