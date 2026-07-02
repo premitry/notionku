@@ -65,6 +65,11 @@ body.light .codewrap.collapsed::after{background:linear-gradient(transparent,#f6
 .msgact{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap}
 .mini{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:0}
 .mini:hover{color:var(--accent)}
+.typing{display:inline-flex;gap:5px;align-items:center;height:20px;padding:2px 0}
+.typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:fxtyping 1.2s infinite ease-in-out}
+.typing span:nth-child(2){animation-delay:.2s}
+.typing span:nth-child(3){animation-delay:.4s}
+@keyframes fxtyping{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
 .thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .thumbs img{max-width:140px;max-height:140px;border-radius:8px;border:1px solid var(--border)}
 .filechip{display:inline-flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:12px;margin-top:4px}
