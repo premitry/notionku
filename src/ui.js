@@ -29,7 +29,9 @@ body.nohist #histbar{margin-left:-260px}
 .hitem .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hitem .a{opacity:0;background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px}
 .hitem:hover .a{opacity:1}
-.center{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
+.center{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0;position:relative}
+.scrollbtn{display:none;position:absolute;bottom:96px;left:50%;transform:translateX(-50%);width:36px;height:36px;border-radius:50%;background:var(--panel2);border:1px solid var(--border);color:var(--text);cursor:pointer;font-size:18px;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.35);z-index:20}
+.scrollbtn:hover{border-color:var(--accent)}
 .topbar{display:flex;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid var(--border)}
 .ttl{font-weight:600;font-size:15px}
 #model{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;max-width:190px}
@@ -118,6 +120,7 @@ mark.find{background:#e7b94e;color:#000;border-radius:2px}
 <main class="center">
 <header class="topbar"><button class="iconbtn" id="togghist" title="Riwayat">☰</button><div class="ttl">Asisten Coding</div><span style="flex:1"></span><input id="model" list="modellist" placeholder="model (default)"/><datalist id="modellist"></datalist><button class="iconbtn" id="membtn" title="Memori">🧠</button><button class="iconbtn" id="toggnotion" title="Panel Notion / GitHub">📄</button><button class="iconbtn" id="settings" title="Pengaturan">⚙️</button><button class="iconbtn" id="theme" title="Tema">🌗</button></header>
 <div id="msgs" class="msgs"></div>
+<button id="scrollbtn" class="scrollbtn" title="Ke bawah">↓</button>
 <div class="composer"><div id="attbar" class="attbar"></div><div class="inputwrap"><textarea id="chatin" rows="1" placeholder="Tanya apa aja soal koding..."></textarea><button class="sendbtn" id="send" title="Kirim">↑</button></div><input type="file" id="fileinput" multiple style="display:none"/><div class="compfoot"><button class="iconbtn" id="attach">📎 Lampirkan</button><label class="row"><input type="checkbox" id="ctx" checked/> Pakai konteks Notion</label><span id="ctxinfo" class="muted"></span></div></div>
 </main>
 <aside id="notionbar"><div class="nhead"><b>📄 Notion / 💻 GitHub</b><span style="flex:1"></span><button class="iconbtn" id="closenotion">✕</button></div><div class="npad"><select id="acc"></select><label id="turbowrap" class="row muted" style="font-size:12px;margin-bottom:8px;display:none"><input type="checkbox" id="turbo"/> Turbo (paralel)</label><input id="search" class="search" placeholder="Cari halaman..."/><div id="pins" class="plist" style="display:none"></div><div id="plist" class="plist"></div><div class="ntoolbar"><button class="btn" id="refresh">↻</button><button class="btn" id="addctx">➕ Konteks</button><button class="btn" id="ghbtn">💻 GitHub</button><button class="btn" id="zip">ZIP</button><button class="btn" id="addcode">+ Code</button><button class="btn" id="pinbtn">📌 Pin</button></div><input id="find" class="search" placeholder="🔎 Cari di halaman..."/><div id="page"><p class="muted">Pilih halaman buat dibuka, atau klik 💻 GitHub.</p></div></div></aside>
