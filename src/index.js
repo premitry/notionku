@@ -182,12 +182,16 @@ async function apiSettingsSave(request, env) {
   if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
   const body = await request.json(); const cur = await getConfig(env); let tokens = cur.tokens;
   if (Array.isArray(body.tokens)) tokens = body.tokens.map((t) => String(t).trim()).filter((t) => t);
+  if (body.clear_tokens) tokens = [];
   let key = cur.openai_key; if (typeof body.openai_key === "string" && body.openai_key.trim()) key = body.openai_key.trim(); if (body.clear_openai_key) key = "";
   let gh = cur.gh_token; if (typeof body.gh_token === "string" && body.gh_token.trim()) gh = body.gh_token.trim(); if (body.clear_gh_token) gh = "";
   const gho = typeof body.gh_owner === "string" ? body.gh_owner.trim() : (cur.gh_owner || "");
   const ghr = typeof body.gh_repo === "string" ? body.gh_repo.trim() : (cur.gh_repo || "");
   const ghb = typeof body.gh_branch === "string" ? body.gh_branch.trim() : (cur.gh_branch || "");
-  await env.CHAT.put("config", JSON.stringify({ tokens, openai_key: key, openai_base: (body.openai_base || "").trim(), openai_model: (body.openai_model || "").trim(), ai_model: (body.ai_model || "").trim(), gh_token: gh, gh_owner: gho, gh_repo: ghr, gh_branch: ghb }));
+  const obase = typeof body.openai_base === "string" ? body.openai_base.trim() : (cur.openai_base || "");
+  const omodel = typeof body.openai_model === "string" ? body.openai_model.trim() : (cur.openai_model || "");
+  const aimodel = typeof body.ai_model === "string" ? body.ai_model.trim() : (cur.ai_model || "");
+  await env.CHAT.put("config", JSON.stringify({ tokens, openai_key: key, openai_base: obase, openai_model: omodel, ai_model: aimodel, gh_token: gh, gh_owner: gho, gh_repo: ghr, gh_branch: ghb }));
   return json({ ok: true, tokenCount: tokens.length });
 }
 function b64encode(str) { const bytes = new TextEncoder().encode(str); let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
