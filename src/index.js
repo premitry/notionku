@@ -65,12 +65,12 @@ async function notionMulti(env, endpoint, init, tokens) { let last; for (let t =
 function rtPlain(rt) { return (rt || []).map((t) => t.plain_text || "").join(""); }
 function pageTitle(p) { const pr = p.properties || {}; for (const k in pr) { if (pr[k] && pr[k].type === "title") return rtPlain(pr[k].title) || "Untitled"; } return "Untitled"; }
 async function apiAccounts(env) {
-  const tokens = await getTokens(env);
+  let tokens; try { tokens = await getTokens(env); } catch (e) { return json({ accounts: [] }); }
   const accounts = await Promise.all(tokens.map(async (tk, i) => { try { const me = await notion(env, "/users/me", {}, tk); const name = (me.bot && me.bot.workspace_name) || me.name || ("Akun " + (i + 1)); return { index: i, name }; } catch (e) { return { index: i, name: "Akun " + (i + 1) + " (token invalid)" }; } }));
   return json({ accounts });
 }
 async function apiSearch(request, env) {
-  const u = new URL(request.url); const q = u.searchParams.get("q") || ""; const acc = u.searchParams.get("acc"); const all = await getTokens(env);
+  const u = new URL(request.url); const q = u.searchParams.get("q") || ""; const acc = u.searchParams.get("acc"); let all; try { all = await getTokens(env); } catch (e) { return json({ results: [], needsToken: true }); }
   const body = JSON.stringify({ query: q, page_size: 50, filter: { property: "object", value: "page" }, sort: { direction: "descending", timestamp: "last_edited_time" } });
   let raw = [];
   if (acc === "auto" && all.length > 1) {
