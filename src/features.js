@@ -222,5 +222,59 @@ function __featuresMain(){
       cf.appendChild(contBtn); cf.appendChild(brBtn);
     }
   }catch(e){}
+
+  // ===== deferred features: OCR, request queue, lazy history, resume-on-disconnect =====
+  // ---------- OCR (Tesseract.js, lazy load) ----------
+  function loadTesseract(){ if(window.Tesseract) return Promise.resolve(); if(window.__tessP) return window.__tessP; window.__tessP=new Promise(function(res,rej){ var s=document.createElement("script"); s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"; s.onload=function(){res()}; s.onerror=function(){window.__tessP=null;rej(new Error("Gagal memuat OCR"))}; document.head.appendChild(s); }); return window.__tessP; }
+  function ocrImage(dataUrl){ return loadTesseract().then(function(){ return window.Tesseract.recognize(dataUrl,"ind+eng"); }).then(function(r){ return (((r&&r.data&&r.data.text)||"").replace(/\n{3,}/g,"\n\n")).trim(); }); }
+  if(typeof renderAttbar==="function"){
+    var _renderAttbarOcr=renderAttbar;
+    renderAttbar=function(){
+      _renderAttbarOcr.apply(this,arguments);
+      try{
+        var box=$id("attbar"); if(!box) return; var atts=box.querySelectorAll(".att");
+        for(var i=0;i<atts.length;i++){ (function(idx,node){ var f=pending[idx]; if(f&&f.kind==="image"&&!f.__ocr){ var b=mkEl("span","x"," \uD83D\uDD0D OCR"); b.style.cursor="pointer"; b.title="Ekstrak teks dari gambar (OCR)"; b.onclick=function(ev){ ev.stopPropagation(); b.textContent=" \u23F3"; ocrImage(f.dataUrl).then(function(txt){ f.__ocr=true; if(txt){ pending.push({name:f.name+".ocr.txt",kind:"text",text:txt}); toast("OCR selesai: "+txt.length+" karakter"); } else { toast("Nggak ada teks yang kebaca",true); } renderAttbar(); }).catch(function(e){ toast(String((e&&e.message)||e),true); b.textContent=" \uD83D\uDD0D OCR"; }); }; node.appendChild(b); } })(i, atts[i]); }
+      }catch(e){}
+    };
+  }
+
+  // ---------- request queue (kirim beruntun tanpa nunggu) ----------
+  window.__queue = window.__queue || [];
+  var qbar=null;
+  try{ var comp=document.querySelector(".composer"); if(comp){ qbar=mkEl("div"); qbar.id="fx-queue"; qbar.style.cssText="display:none;flex-wrap:wrap;gap:6px;margin-bottom:6px"; comp.insertBefore(qbar, comp.firstChild); } }catch(e){}
+  function renderQueue(){ if(!qbar) return; var q=window.__queue; if(!q.length){ qbar.style.display="none"; qbar.innerHTML=""; return; } qbar.style.display="flex"; qbar.innerHTML=""; q.forEach(function(item,i){ var chip=mkEl("div","att"); chip.textContent="\u23F3 "+(item.t?item.t.slice(0,32):("("+item.files.length+" file)")); var x=mkEl("span","x"," \u2715"); x.style.cursor="pointer"; x.onclick=function(){ q.splice(i,1); renderQueue(); }; chip.appendChild(x); qbar.appendChild(chip); }); }
+  if(typeof sendChat==="function"){
+    var _sendChatQ=sendChat;
+    sendChat=function(){
+      if(window.__ctrl){ var inp=$id("chatin"); var t=(inp&&inp.value.trim())||""; var f=(typeof pending!=="undefined")?pending.slice():[]; if(!t&&!f.length) return; window.__queue.push({t:t,files:f}); if(typeof pending!=="undefined"){ pending.length=0; if(typeof renderAttbar==="function") renderAttbar(); } if(inp){ inp.value=""; inp.style.height="auto"; } renderQueue(); toast("Masuk antrean ("+window.__queue.length+") \u2014 dikirim setelah jawaban ini selesai"); return; }
+      return _sendChatQ.apply(this, arguments);
+    };
+  }
+  function drainQueue(){ if(window.__ctrl) return; if(!window.__queue.length) return; var item=window.__queue.shift(); renderQueue(); if(typeof pushMsg==="function"){ pushMsg("user", item.t, item.files); if(typeof renderChat==="function") renderChat(); if(typeof streamReply==="function") streamReply(); } }
+  if(typeof streamReply==="function"){ var _srDrain=streamReply; streamReply=function(){ var r=_srDrain.apply(this,arguments); Promise.resolve(r).then(function(){ try{ drainQueue(); }catch(e){} }); return r; }; }
+
+  // ---------- lazy-load history (render bertahap + infinite scroll) ----------
+  window.__histLimit = window.__histLimit || 40;
+  if(typeof renderHistory==="function"){
+    renderHistory=function(){
+      var box=$id("histlist"); if(!box) return;
+      var f=(($id("histsearch")&&$id("histsearch").value)||"").toLowerCase();
+      var all=(window.__sessions||[]).filter(function(s){ return !f||(s.title||"").toLowerCase().indexOf(f)>=0; });
+      var lim=window.__histLimit||40; var shown=all.slice(0,lim);
+      box.innerHTML="";
+      shown.forEach(function(s){ var it=mkEl("div","hitem"+((typeof state!=="undefined"&&state.chatId===s.id)?" active":"")); var t=mkEl("div","t",esc(s.title)); t.onclick=function(){ openChat(s.id); }; it.appendChild(t); var rn=mkEl("button","a","\u270F\uFE0F"); rn.onclick=function(ev){ ev.stopPropagation(); renameChat(s.id,s.title); }; var dl=mkEl("button","a","\uD83D\uDDD1\uFE0F"); dl.onclick=function(ev){ ev.stopPropagation(); delChatById(s.id); }; it.appendChild(rn); it.appendChild(dl); box.appendChild(it); });
+      if(all.length>shown.length){ var rem=all.length-shown.length; var more=mkEl("div","hitem"); more.style.justifyContent="center"; more.style.color="var(--muted)"; more.style.cursor="pointer"; more.textContent="\u2B07\uFE0F Muat "+Math.min(40,rem)+" lagi ("+rem+" tersisa)"; more.onclick=function(){ window.__histLimit=lim+40; renderHistory(); }; box.appendChild(more); }
+    };
+    try{ var _hl=$id("histlist"); if(_hl){ _hl.addEventListener("scroll",function(){ if(_hl.scrollTop+_hl.clientHeight>=_hl.scrollHeight-48){ var all=(window.__sessions||[]); if((window.__histLimit||40)<all.length){ window.__histLimit=(window.__histLimit||40)+40; renderHistory(); } } }); } }catch(e){}
+    try{ var _hs=$id("histsearch"); if(_hs){ _hs.addEventListener("input",function(){ window.__histLimit=40; renderHistory(); }); } }catch(e){}
+    try{ renderHistory(); }catch(e){}
+  }
+
+  // ---------- resume-on-disconnect: pulihkan jawaban terputus saat load ----------
+  try{
+    var _rkey="resume:"+((typeof state!=="undefined"&&state.chatId)||"new");
+    var _saved=LS.getItem(_rkey);
+    if(_saved){ var _obj=JSON.parse(_saved); if(_obj&&_obj.acc&&(Date.now()-(_obj.t||0)<86400000)){ if(typeof state!=="undefined"&&state.chat&&state.chat.length){ var _lm=state.chat[state.chat.length-1]; if(_lm&&_lm.role==="assistant"&&(!_lm.content||_lm.content.length<_obj.acc.length)){ _lm.content=_obj.acc; if(typeof renderChat==="function") renderChat(); toast("\uD83D\uDD0C Jawaban yang terputus dipulihkan \u2014 klik \u25B6\uFE0F Lanjutkan untuk menyambung"); } } } }
+  }catch(e){}
 }
 export const FEATURES_JS = "(" + __featuresMain.toString() + ")();";
