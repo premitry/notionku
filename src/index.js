@@ -24,6 +24,9 @@ export default {
       if (p === "/api/gh/tree") return apiGhTree(request, env);
       if (p === "/api/gh/file") return apiGhFile(request, env);
       if (p === "/api/gh/commit") return apiGhCommit(request, env);
+      if (p === "/api/gh/oauth/start") return apiGhOauthStart(request, env);
+      if (p === "/api/gh/oauth/poll") return apiGhOauthPoll(request, env);
+      if (p === "/api/gh/repos") return apiGhRepos(request, env);
       if (p.startsWith("/api/")) return json({ error: "Not found" }, 404);
       return htmlResponse();
     } catch (e) { return json({ error: String((e && e.message) || e) }, 500); }
@@ -32,8 +35,8 @@ export default {
 function json(o, s) { return new Response(JSON.stringify(o), { status: s || 200, headers: { "content-type": "application/json; charset=utf-8" } }); }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 async function getConfig(env) {
-  const cfg = { tokens: [], openai_key: "", openai_base: "", openai_model: "", ai_model: "", gh_token: "", gh_owner: "", gh_repo: "", gh_branch: "" };
-  if (env.CHAT) { const s = await env.CHAT.get("config", "json"); if (s) { cfg.tokens = s.tokens || []; cfg.openai_key = s.openai_key || ""; cfg.openai_base = s.openai_base || ""; cfg.openai_model = s.openai_model || ""; cfg.ai_model = s.ai_model || ""; cfg.gh_token = s.gh_token || ""; cfg.gh_owner = s.gh_owner || ""; cfg.gh_repo = s.gh_repo || ""; cfg.gh_branch = s.gh_branch || ""; } }
+  const cfg = { tokens: [], openai_key: "", openai_base: "", openai_model: "", ai_model: "", gh_token: "", gh_owner: "", gh_repo: "", gh_branch: "", gh_client_id: "" };
+  if (env.CHAT) { const s = await env.CHAT.get("config", "json"); if (s) { cfg.tokens = s.tokens || []; cfg.openai_key = s.openai_key || ""; cfg.openai_base = s.openai_base || ""; cfg.openai_model = s.openai_model || ""; cfg.ai_model = s.ai_model || ""; cfg.gh_token = s.gh_token || ""; cfg.gh_owner = s.gh_owner || ""; cfg.gh_repo = s.gh_repo || ""; cfg.gh_branch = s.gh_branch || ""; cfg.gh_client_id = s.gh_client_id || ""; } }
   return cfg;
 }
 async function getTokens(env) {
@@ -177,7 +180,7 @@ async function apiHistoryDelete(request, env) {
 async function apiMemory(request, env) { if (!env.CHAT) return json({ facts: [] }); return json({ facts: (await env.CHAT.get("memory:facts", "json")) || [] }); }
 async function apiMemorySave(request, env) { if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400); const body = await request.json(); const facts = (body.facts || []).slice(0, 100); await env.CHAT.put("memory:facts", JSON.stringify(facts)); return json({ ok: true, facts }); }
 function maskTok(t) { t = String(t); return t.length <= 10 ? "****" : t.slice(0, 6) + "..." + t.slice(-4); }
-async function apiSettings(request, env) { if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set. Deploy dengan KV namespace dulu." }, 400); const cfg = await getConfig(env); return json({ tokens: cfg.tokens.map(maskTok), openai_key_set: !!cfg.openai_key, openai_base: cfg.openai_base, openai_model: cfg.openai_model, ai_model: cfg.ai_model, gh_token_set: !!cfg.gh_token, gh_owner: cfg.gh_owner, gh_repo: cfg.gh_repo, gh_branch: cfg.gh_branch }); }
+async function apiSettings(request, env) { if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set. Deploy dengan KV namespace dulu." }, 400); const cfg = await getConfig(env); return json({ tokens: cfg.tokens.map(maskTok), openai_key_set: !!cfg.openai_key, openai_base: cfg.openai_base, openai_model: cfg.openai_model, ai_model: cfg.ai_model, gh_token_set: !!cfg.gh_token, gh_owner: cfg.gh_owner, gh_repo: cfg.gh_repo, gh_branch: cfg.gh_branch, gh_client_id: cfg.gh_client_id }); }
 async function apiSettingsSave(request, env) {
   if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
   const body = await request.json(); const cur = await getConfig(env); let tokens = cur.tokens;
@@ -191,7 +194,8 @@ async function apiSettingsSave(request, env) {
   const obase = typeof body.openai_base === "string" ? body.openai_base.trim() : (cur.openai_base || "");
   const omodel = typeof body.openai_model === "string" ? body.openai_model.trim() : (cur.openai_model || "");
   const aimodel = typeof body.ai_model === "string" ? body.ai_model.trim() : (cur.ai_model || "");
-  await env.CHAT.put("config", JSON.stringify({ tokens, openai_key: key, openai_base: obase, openai_model: omodel, ai_model: aimodel, gh_token: gh, gh_owner: gho, gh_repo: ghr, gh_branch: ghb }));
+  const gci = typeof body.gh_client_id === "string" ? body.gh_client_id.trim() : (cur.gh_client_id || "");
+  await env.CHAT.put("config", JSON.stringify({ tokens, openai_key: key, openai_base: obase, openai_model: omodel, ai_model: aimodel, gh_token: gh, gh_owner: gho, gh_repo: ghr, gh_branch: ghb, gh_client_id: gci }));
   return json({ ok: true, tokenCount: tokens.length });
 }
 function b64encode(str) { const bytes = new TextEncoder().encode(str); let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
@@ -231,4 +235,27 @@ async function apiGhCommit(request, env) {
   return json({ results });
 }
 
+async function apiGhOauthStart(request, env) {
+  const cfg = await getConfig(env); if (!cfg.gh_client_id) return json({ error: "GitHub Client ID belum di-set. Isi dulu di Pengaturan." }, 400);
+  const res = await fetch("https://github.com/login/device/code", { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ client_id: cfg.gh_client_id, scope: "repo" }) });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || d.error) return json({ error: d.error_description || d.error || ("GitHub error " + res.status) }, 400);
+  return json({ device_code: d.device_code, user_code: d.user_code, verification_uri: d.verification_uri, interval: d.interval || 5, expires_in: d.expires_in || 900 });
+}
+async function apiGhOauthPoll(request, env) {
+  const body = await request.json(); const cfg = await getConfig(env);
+  if (!cfg.gh_client_id) return json({ error: "GitHub Client ID belum di-set." }, 400);
+  if (!body.device_code) return json({ error: "device_code wajib" }, 400);
+  const res = await fetch("https://github.com/login/oauth/access_token", { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ client_id: cfg.gh_client_id, device_code: body.device_code, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }) });
+  const d = await res.json().catch(() => ({}));
+  if (d.access_token) { const c = await getConfig(env); c.gh_token = d.access_token; await env.CHAT.put("config", JSON.stringify(c)); return json({ ok: true }); }
+  return json({ error: d.error || "authorization_pending" });
+}
+async function apiGhRepos(request, env) {
+  const cfg = await getConfig(env);
+  const data = await ghApi(env, "/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member");
+  const repos = (data || []).map((x) => ({ full_name: x.full_name, default_branch: x.default_branch || "main" }));
+  const current = cfg.gh_owner && cfg.gh_repo ? (cfg.gh_owner + "/" + cfg.gh_repo) : "";
+  return json({ repos, current });
+}
 function htmlResponse() { return new Response(PAGE_HTML, { headers: { "content-type": "text/html; charset=utf-8" } }); }
