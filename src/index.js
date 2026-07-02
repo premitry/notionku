@@ -1,7 +1,7 @@
 import { PAGE_HTML } from "./ui.js";
 const NOTION_VERSION = "2022-06-28";
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const p = url.pathname;
     try {
@@ -11,7 +11,7 @@ export default {
       if (p === "/api/page") return apiPage(request, env);
       if (p === "/api/block") return apiUpdateBlock(request, env);
       if (p === "/api/append") return apiAppend(request, env);
-      if (p === "/api/chat") return apiChat(request, env);
+      if (p === "/api/chat") return apiChat(request, env, ctx);
       if (p === "/api/models") return apiModels(request, env);
       if (p === "/api/history") return apiHistory(request, env);
       if (p === "/api/history/save") return apiHistorySave(request, env);
@@ -108,14 +108,32 @@ async function apiAppend(request, env) {
   const data = await notionMulti(env, "/blocks/" + body.pageId + "/children", { method: "PATCH", body: JSON.stringify({ children: [{ object: "block", type: "code", code: { rich_text: [{ type: "text", text: { content: body.text || "" } }], language: body.language || "plain text" } }] }) }, tokens);
   return json({ ok: true, result: data });
 }
-async function apiChat(request, env) {
+function hashKey(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 0x01000193) >>> 0; } return ("00000000" + h.toString(16)).slice(-8) + str.length.toString(36); }
+function sseFromText(text) {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({ start(c) { const size = 90; for (let i = 0; i < text.length; i += size) { c.enqueue(enc.encode("data: " + JSON.stringify({ choices: [{ delta: { content: text.slice(i, i + size) } }] }) + "\n\n")); } c.enqueue(enc.encode("data: [DONE]\n\n")); c.close(); } });
+  return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", "x-cache": "HIT" } });
+}
+function cacheTee(source, env, ck, ctx) {
+  let acc = ""; let buf = ""; const dec = new TextDecoder();
+  const ts = new TransformStream({
+    transform(chunk, controller) { controller.enqueue(chunk); try { buf += dec.decode(chunk, { stream: true }); const parts = buf.split("\n"); buf = parts.pop(); for (const line of parts) { const l = line.trim(); if (!l || l.indexOf("data:") !== 0) continue; const pl = l.slice(5).trim(); if (pl === "[DONE]") continue; try { const j = JSON.parse(pl); const d = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || j.response || ""; if (d) acc += d; } catch (e) {} } } catch (e) {} },
+    flush() { if (ck && acc && ctx && ctx.waitUntil) { try { ctx.waitUntil(env.CHAT.put(ck, acc, { expirationTtl: 86400 })); } catch (e) {} } },
+  });
+  return source.pipeThrough(ts);
+}
+async function apiChat(request, env, ctx) {
   const body = await request.json(); const messages = body.messages || []; const cfg = await getConfig(env); const key = cfg.openai_key || env.OPENAI_API_KEY;
-  if (!key && env.AI) { const stream = await env.AI.run(body.model || cfg.ai_model || env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct", { messages, stream: true }); return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } }); }
+  const model0 = body.model || cfg.openai_model || cfg.ai_model || "";
+  const cacheOn = !!env.CHAT && body.cache !== false && messages.length > 0;
+  const ck = cacheOn ? ("cache:" + hashKey(model0 + "\u0000" + JSON.stringify(messages))) : null;
+  if (ck) { try { const hit = await env.CHAT.get(ck); if (hit) return sseFromText(hit); } catch (e) {} }
+  if (!key && env.AI) { const stream = await env.AI.run(body.model || cfg.ai_model || env.AI_MODEL || "@cf/meta/llama-3.1-8b-instruct", { messages, stream: true }); return new Response(cacheTee(stream, env, ck, ctx), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", "x-cache": "MISS" } }); }
   if (!key) return json({ error: "OpenAI API Key belum di-set. Buka Pengaturan di web." }, 400);
   const base = cfg.openai_base || env.OPENAI_BASE_URL || "https://api.openai.com/v1"; const model = body.model || cfg.openai_model || env.OPENAI_MODEL || "gpt-4o-mini";
   const res = await fetch(base + "/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, stream: true }) });
   if (!res.ok) { const t = await res.text(); return json({ error: "LLM error: " + t }, 500); }
-  return new Response(res.body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+  return new Response(cacheTee(res.body, env, ck, ctx), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", "x-cache": "MISS" } });
 }
 async function apiModels(request, env) {
   const cfg = await getConfig(env); const key = cfg.openai_key || env.OPENAI_API_KEY;
@@ -128,7 +146,10 @@ async function apiHistory(request, env) {
   if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
   const u = new URL(request.url); const id = u.searchParams.get("id");
   if (id) { const s = await env.CHAT.get("session:" + id, "json"); if (!s) return json({ error: "Sesi nggak ketemu" }, 404); return json(s); }
-  const index = await readIndex(env); index.sort((a, b) => (b.updated || 0) - (a.updated || 0)); return json({ sessions: index });
+  const index = await readIndex(env); index.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const off = parseInt(u.searchParams.get("offset") || "0", 10) || 0; const lim = parseInt(u.searchParams.get("limit") || "0", 10) || 0;
+  if (lim > 0) return json({ sessions: index.slice(off, off + lim), total: index.length, hasMore: off + lim < index.length });
+  return json({ sessions: index, total: index.length });
 }
 async function apiHistorySave(request, env) {
   if (!env.CHAT) return json({ error: "KV binding CHAT belum di-set" }, 400);
