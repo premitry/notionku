@@ -47,6 +47,13 @@ body.nohist #histbar{margin-left:-260px}
 body.light .bubble pre{background:#f6f8fa}
 .bubble code{background:rgba(127,127,127,.18);padding:1px 5px;border-radius:5px}
 .bubble pre code{background:none;padding:0}
+.codewrap{margin:8px 0;position:relative}
+.codebar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:4px}
+.codebar .cwlang{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.codetoggle{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:2px 10px;font-size:11px;cursor:pointer;white-space:nowrap}
+.codewrap.collapsed pre{max-height:132px;overflow:hidden}
+.codewrap.collapsed::after{content:"";position:absolute;left:0;right:0;bottom:0;height:44px;pointer-events:none;background:linear-gradient(transparent,#0d0d0d)}
+body.light .codewrap.collapsed::after{background:linear-gradient(transparent,#f6f8fa)}
 .bubble ul,.bubble ol{margin:6px 0;padding-left:22px}
 .bubble h2,.bubble h3,.bubble h4{margin:10px 0 4px}
 .bubble a{color:var(--accent)}
