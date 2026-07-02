@@ -17,7 +17,7 @@ Dashboard Cloudflare → **Workers & Pages → KV → Create a namespace** (kasi
 Lalu edit `wrangler.toml` di repo hasil fork, ganti `ISI_NAMESPACE_ID_KAMU` dengan ID tadi, terus commit. Bisa langsung dari web GitHub: buka file → ikon ✏️ **Edit** → **Commit changes**.
 
 ### 3. Bikin `.github/workflows/deploy.yml`
-Di repo hasil fork, bikin file baru di path **`.github/workflows/deploy.yml`** dengan isi berikut (klik **Add file → Create new file**, ketik path-nya, tempel isinya, commit):
+Di repo hasil fork, bikin file baru di path **`.github/workflows/deploy.yml`** dengan isi berikut (klik **Add file → Create new file**, ketik path-nya, tempel isinya, commit). Ganti `SECRET_API_TOKEN` dan `SECRET_ACCOUNT_ID` sesuai catatan di bawah blok kode:
 
 ```yaml
 name: Deploy to Cloudflare Workers
@@ -38,9 +38,15 @@ jobs:
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: $ secrets.CLOUDFLARE_API_TOKEN 
-          accountId: $ secrets.CLOUDFLARE_ACCOUNT_ID 
+          apiToken: SECRET_API_TOKEN
+          accountId: SECRET_ACCOUNT_ID
 ```
+
+**PENTING:** ganti dua baris terakhir persis jadi ekspresi secret GitHub berikut (pakai dua kurung kurawal):
+- `apiToken:` → isi dengan `$` diikuti ` secrets.CLOUDFLARE_API_TOKEN `
+- `accountId:` → isi dengan `$` diikuti ` secrets.CLOUDFLARE_ACCOUNT_ID `
+
+Jadi hasil akhirnya baris `apiToken` = tanda dolar lalu kurung-kurawal-ganda-buka, spasi, `secrets.CLOUDFLARE_API_TOKEN`, spasi, kurung-kurawal-ganda-tutup. Sama buat `accountId` dengan `secrets.CLOUDFLARE_ACCOUNT_ID`.
 
 > File ini nggak bisa ditambahin otomatis lewat integrasi (butuh izin `workflow`), jadi tambahin manual sekali ini aja.
 
@@ -55,7 +61,7 @@ Setiap push ke branch `main` bakal nge-trigger deploy otomatis. Mau deploy manua
 > Kalau tab **Actions** ke-disable di repo hasil fork, buka **Settings → Actions → General** → izinkan workflow jalan.
 
 ### 6. Atur token & API key di web
-Buka URL worker-mu → klik **⚙️ Pengaturan** → isi token Notion & API key (lihat [bagian di bawah](#2-atur-semuanya-di-web)). Selesai — nggak perlu CMD sama sekali.
+Buka URL worker-mu → klik **⚙️ Pengaturan** → isi token Notion & API key (lihat bagian di bawah). Selesai — nggak perlu CMD sama sekali.
 
 ---
 
