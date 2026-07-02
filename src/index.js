@@ -225,14 +225,24 @@ async function apiGhFile(request, env) {
 }
 async function apiGhCommit(request, env) {
   const body = await request.json(); const files = body.files || []; if (!files.length) return json({ error: "Nggak ada file buat di-commit" }, 400);
-  const r = await ghRepo(env); const results = [];
-  for (const f of files) {
-    let sha = f.sha;
-    if (!sha) { try { const cur = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/contents/" + ghPath(f.path) + "?ref=" + encodeURIComponent(r.branch)); sha = cur.sha; } catch (e) {} }
-    const payload = { message: body.message || ("Update " + f.path + " via notionku"), content: b64encode(f.content || ""), branch: r.branch }; if (sha) payload.sha = sha;
-    try { const res = await ghApi(env, "/repos/" + r.owner + "/" + r.repo + "/contents/" + ghPath(f.path), { method: "PUT", body: JSON.stringify(payload) }); results.push({ path: f.path, ok: true, url: (res.content && res.content.html_url) || "" }); } catch (e) { results.push({ path: f.path, ok: false, error: String((e && e.message) || e) }); }
+  const r = await ghRepo(env); const base = "/repos/" + r.owner + "/" + r.repo;
+  try {
+    const ref = await ghApi(env, base + "/git/ref/heads/" + encodeURIComponent(r.branch));
+    const baseSha = ref.object.sha;
+    const baseCommit = await ghApi(env, base + "/git/commits/" + baseSha);
+    const treeItems = [];
+    for (const f of files) {
+      const blob = await ghApi(env, base + "/git/blobs", { method: "POST", body: JSON.stringify({ content: b64encode(f.content || ""), encoding: "base64" }) });
+      treeItems.push({ path: String(f.path).replace(/^\/+/, ""), mode: "100644", type: "blob", sha: blob.sha });
+    }
+    const tree = await ghApi(env, base + "/git/trees", { method: "POST", body: JSON.stringify({ base_tree: baseCommit.tree.sha, tree: treeItems }) });
+    const commit = await ghApi(env, base + "/git/commits", { method: "POST", body: JSON.stringify({ message: body.message || ("Update " + files.length + " file via notionku"), tree: tree.sha, parents: [baseSha] }) });
+    await ghApi(env, base + "/git/refs/heads/" + encodeURIComponent(r.branch), { method: "PATCH", body: JSON.stringify({ sha: commit.sha }) });
+    return json({ results: files.map((f) => ({ path: f.path, ok: true, url: commit.html_url || "" })), commit: commit.sha, commit_url: commit.html_url || "", count: files.length });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    return json({ results: files.map((f) => ({ path: f.path, ok: false, error: msg })), error: msg });
   }
-  return json({ results });
 }
 
 async function apiGhOauthStart(request, env) {
