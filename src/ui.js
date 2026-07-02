@@ -123,4 +123,8 @@ const TAIL = `
 <\/script>
 </body></html>`;
 
-export const PAGE_HTML = SHELL_HEAD + SCRIPT_OPEN + CLIENT_JS + "\n</script>\n<script>\n" + FEATURES_JS + TAIL;
+// Shim buat helper __name yang disuntik esbuild (--keep-names) saat wrangler deploy.
+// Karena CLIENT_JS/FEATURES_JS di-serialisasi via toString(), panggilan __name(...) ikut
+// terbawa ke browser padahal definisinya cuma ada di scope worker. Definisikan di sini.
+const NAME_SHIM = 'var __name=(t,n)=>{try{Object.defineProperty(t,"name",{value:n,configurable:true})}catch(e){}return t};\n';
+export const PAGE_HTML = SHELL_HEAD + SCRIPT_OPEN + NAME_SHIM + CLIENT_JS + "\n</script>\n<script>\n" + NAME_SHIM + FEATURES_JS + TAIL;
