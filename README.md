@@ -2,8 +2,65 @@
 
 Single-file Cloudflare Worker buat "jalanin" Notion di web sendiri yang fokus koding: viewer rapi buat code block, editor buat ubah/simpan code balik ke Notion, export ke file/ZIP, search & navigasi halaman, plus panel chat AI ala ChatGPT. Autentikasi pakai **official Notion API**, support **banyak akun/token** sekaligus + mode Turbo.
 
-## Setup (cukup 1x lewat CMD, sisanya di web)
-Deploy worker-nya sekali pakai Wrangler, lalu **semua setting (token Notion, OpenAI key, model) diatur langsung dari tombol ⚙️ Pengaturan di web** — disimpan di Cloudflare KV.
+---
+
+## 🚀 Install langsung dari GitHub (paling gampang, tanpa CMD)
+
+Cukup **fork** repo ini, lalu biarin **GitHub Actions** yang nge-deploy otomatis ke Cloudflare tiap ada push. Nggak perlu install Wrangler atau buka terminal.
+
+### 1. Fork repo ini
+Klik tombol **Fork** di kanan atas halaman repo GitHub ini → repo ke-copy ke akun kamu.
+
+### 2. Bikin KV namespace di Cloudflare (sekali aja)
+Dashboard Cloudflare → **Workers & Pages → KV → Create a namespace** (kasih nama bebas, mis. `CHAT`) → salin **Namespace ID**-nya.
+
+Lalu edit `wrangler.toml` di repo hasil fork, ganti `ISI_NAMESPACE_ID_KAMU` dengan ID tadi, terus commit. Bisa langsung dari web GitHub: buka file → ikon ✏️ **Edit** → **Commit changes**.
+
+### 3. Bikin `.github/workflows/deploy.yml`
+Di repo hasil fork, bikin file baru di path **`.github/workflows/deploy.yml`** dengan isi berikut (klik **Add file → Create new file**, ketik path-nya, tempel isinya, commit):
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: $ secrets.CLOUDFLARE_API_TOKEN 
+          accountId: $ secrets.CLOUDFLARE_ACCOUNT_ID 
+```
+
+> File ini nggak bisa ditambahin otomatis lewat integrasi (butuh izin `workflow`), jadi tambahin manual sekali ini aja.
+
+### 4. Set 2 secret di repo GitHub
+Di repo hasil fork → **Settings → Secrets and variables → Actions → New repository secret**, tambahin:
+- **`CLOUDFLARE_API_TOKEN`** — bikin di Cloudflare → **My Profile → API Tokens → Create Token → template "Edit Cloudflare Workers"**.
+- **`CLOUDFLARE_ACCOUNT_ID`** — ada di dashboard Cloudflare (di sidebar Workers & Pages, atau di URL dashboard).
+
+### 5. Deploy otomatis
+Setiap push ke branch `main` bakal nge-trigger deploy otomatis. Mau deploy manual? Buka tab **Actions → Deploy to Cloudflare Workers → Run workflow**.
+
+> Kalau tab **Actions** ke-disable di repo hasil fork, buka **Settings → Actions → General** → izinkan workflow jalan.
+
+### 6. Atur token & API key di web
+Buka URL worker-mu → klik **⚙️ Pengaturan** → isi token Notion & API key (lihat [bagian di bawah](#2-atur-semuanya-di-web)). Selesai — nggak perlu CMD sama sekali.
+
+---
+
+## 💻 Alternatif: deploy manual lewat CMD
+Kalau lebih suka deploy dari komputer sendiri pakai Wrangler:
 
 ### 1. Deploy (sekali aja)
 ```bash
@@ -28,11 +85,13 @@ Klik **Simpan**. Selesai — nggak perlu `wrangler secret put` lagi.
 - Export semua code block ke file / ZIP, plus perintah chat "zip semua code"
 - Search & navigasi halaman, pin/favorit, cari teks di halaman
 - Chat AI (OpenAI-compatible / Cloudflare Workers AI): streaming, stop, render markdown lengkap, opsi pilihan klik
-- Riwayat chat per-sesi + URL per chat (Cloudflare KV)
+- Riwayat chat per-sesi + URL per chat (Cloudflare KV), lazy-load + infinite scroll
 - Memori jangka panjang (AI auto-inget fakta penting lintas chat)
-- Lampiran file/foto/ZIP ke chat
+- Lampiran file/foto/ZIP ke chat + OCR gambar (ekstrak teks dari foto)
+- Response cache (jawaban sama di-cache 24 jam) + antrean request + auto-reconnect kalau koneksi putus
+- Integrasi GitHub: browse repo, edit, commit langsung dari web
 - Setup via web (⚙️) — token & API key diatur di browser, disimpan di KV
-- Multi-akun + mode Turbo, light/dark theme
+- Multi-akun + mode Turbo, light/dark theme, mobile-friendly
 
 ## Env vars (opsional — fallback)
 Masih bisa pakai secret via CMD sebagai fallback (setting dari web/KV diprioritaskan di atas env):
