@@ -66,10 +66,53 @@ function pushMsg(role,content,files){state.chat.push({role:role,content:content,
 function renderChat(){var c=$("msgs");c.innerHTML="";if(!state.chat.length){var emp=el("div","empty");emp.innerHTML='<div class="hello">Mau ngoding apa hari ini?</div><div>Tanya apa aja, lampirin file/foto/zip, atau buka halaman Notion di kanan.</div>';c.appendChild(emp);return}var th=el("div","thread");state.chat.forEach(function(m,i){var d=el("div","msg "+m.role);d.appendChild(el("div","avatar",m.role==="user"?"\ud83e\uddd1":"\ud83e\udd16"));var body=el("div","mbody");if(editing===i){var ta=el("textarea");ta.className="set";ta.value=m.content;ta.rows=4;body.appendChild(ta);var rw=el("div","row");rw.style.marginTop="6px";var sv=el("button","btn accent","Simpan & generate");var cn=el("button","btn","Batal");rw.appendChild(sv);rw.appendChild(cn);body.appendChild(rw);sv.onclick=function(){saveEdit(i,ta.value)};cn.onclick=function(){editing=-1;renderChat()};d.appendChild(body);th.appendChild(d);return}var pr=m.role==="assistant"?parseOpts(stripMemory(m.content).body):{body:m.content,opts:[]};var bub=el("div","bubble",mdRender(pr.body));body.appendChild(bub);try{bub.querySelectorAll("pre code").forEach(function(cb){hljs.highlightElement(cb)})}catch(e){}if(m.files&&m.files.length){var fh=el("div");fh.innerHTML=filesHtml(m.files);body.appendChild(fh)}if(pr.opts.length){var ob=el("div","opts");pr.opts.forEach(function(op){var chip=el("button","chip",esc(op));chip.onclick=function(){$("chatin").value=op;sendChat()};ob.appendChild(chip)});body.appendChild(ob)}var act=el("div","msgact");if(m.role==="user"){var eb=el("button","mini","\u270f\ufe0f Edit");eb.onclick=function(){editing=i;renderChat()};act.appendChild(eb)}if(m.role==="assistant"){if(collectCodeFromText(m.content).length){var zb=el("button","mini","\ud83d\udce6 ZIP");zb.onclick=function(){zipFromText(m.content,"ai-output")};act.appendChild(zb)}var __wp=collectCodeFromText(m.content).filter(function(c){return c.path});if(__wp.length){var gb=el("button","mini","\ud83d\ude80 Commit GitHub");gb.onclick=function(){var msg=prompt("Pesan commit:","Update "+__wp.length+" file via notionku");if(msg==null)return;ghCommit(__wp.map(function(c){return{path:c.path,content:c.text}}),msg)};act.appendChild(gb)}if(i===state.chat.length-1){var rb=el("button","mini","\ud83d\udd04 Ulangi");rb.onclick=function(){regenerateFrom(i)};act.appendChild(rb)}}body.appendChild(act);d.appendChild(body);th.appendChild(d)});c.appendChild(th);c.scrollTop=c.scrollHeight}
 function buildContext(){var sys="Kamu asisten coding yang membantu. Balas dalam bahasa Indonesia kecuali diminta lain. Untuk kode, selalu pakai blok kode markdown dengan nama bahasa. Kalau kode untuk file tertentu, tulis nama path setelah bahasa di pembuka blok (mis. js src/app.js) biar bisa di-ZIP/commit rapi. Kalau user minta edit atau commit ke GitHub, tulis tiap file sebagai blok kode lengkap dengan path di pembuka blok; nanti user klik tombol Commit. Kalau mau kasih pilihan ke user, tulis di baris terpisah diawali ::OPTIONS:: lalu opsi dipisah tanda |. Kalau ada fakta penting jangka panjang tentang user/proyek, tulis di baris diawali ::MEMORY:: .";if(state.memory.length)sys+="\nMemori: "+state.memory.join("; ");var ctxPages=state.context.slice();if($("ctx").checked&&state.blocks.length&&!ctxPages.some(function(x){return x.id===state.current})){ctxPages.push({id:state.current,title:state.title,codes:collectCode()})}ctxPages.forEach(function(pg){if(pg.codes&&pg.codes.length){sys+="\n\nKode dari '"+pg.title+"':\n";pg.codes.forEach(function(c){sys+=FENCE+c.language+(c.path?(" "+c.path):"")+"\n"+c.text+"\n"+FENCE+"\n"})}});return sys}
 function msgsForApi(){var arr=[{role:"system",content:buildContext()}];state.chat.forEach(function(m){var txt=m.content;var imgs=(m.files||[]).filter(function(f){return f.kind==="image"});(m.files||[]).forEach(function(f){if(f.kind==="text")txt+="\n\n[File: "+f.name+"]\n"+f.text});if(imgs.length){var parts=[{type:"text",text:txt}];imgs.forEach(function(f){parts.push({type:"image_url",image_url:{url:f.dataUrl}})});arr.push({role:m.role,content:parts})}else{arr.push({role:m.role,content:txt})}});return arr}
-async function streamReply(){var c=$("msgs");pushMsg("assistant","");var idx=state.chat.length-1;renderChat();var ctrl=new AbortController();window.__ctrl=ctrl;$("send").textContent="\u25a0";try{var res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgsForApi(),model:($("model").value||"").trim()||undefined}),signal:ctrl.signal});if(!res.ok||!res.body){var er=await res.json().catch(function(){return{}});state.chat[idx].content="\u26a0\ufe0f "+(er.error||"Gagal konek ke AI");toast(er.error||"Gagal konek ke AI",true);renderChat();return}var reader=res.body.getReader();var dec=new TextDecoder();var buf="";var acc="";while(true){var rd=await reader.read();if(rd.done)break;buf+=dec.decode(rd.value,{stream:true});var parts=buf.split("\n");buf=parts.pop();for(var k=0;k<parts.length;k++){var line=parts[k].trim();if(!line||line.indexOf("data:")!==0)continue;var payload=line.slice(5).trim();if(payload==="[DONE]")continue;try{var j=JSON.parse(payload);var delta=(j.choices&&j.choices[0]&&(j.choices[0].delta&&j.choices[0].delta.content))||j.response||"";if(delta){acc+=delta;state.chat[idx].content=acc;var bub=document.querySelectorAll(".msg.assistant .bubble");if(bub.length){var last=bub[bub.length-1];last.innerHTML=mdRender(stripMemory(acc).body)}c.scrollTop=c.scrollHeight}}catch(e){}}}var facts=collectMemoryFrom(acc);if(facts.length){facts.forEach(function(f){if(state.memory.indexOf(f)<0)state.memory.push(f)});saveMemory()}renderChat()}catch(e){if(e.name!=="AbortError"){state.chat[idx].content="\u26a0\ufe0f "+e.message;toast("Error: "+e.message,true)}renderChat()}finally{window.__ctrl=null;$("send").textContent="\u2191";saveHistory()}}
+async function streamReply(){
+var c=$("msgs");pushMsg("assistant","");var idx=state.chat.length-1;renderChat();
+var ctrl=new AbortController();window.__ctrl=ctrl;$("send").textContent="\u25a0";
+var baseMsgs=msgsForApi();var acc="";var rid="resume:"+(state.chatId||"new");var lastP=0;var cacheFlag=window.__nocacheOnce?false:true;window.__nocacheOnce=false;
+function paint(){var bub=document.querySelectorAll(".msg.assistant .bubble");if(bub.length){var last=bub[bub.length-1];last.innerHTML=mdRender(stripMemory(acc).body)}c.scrollTop=c.scrollHeight}
+function persist(force){var now=Date.now();if(!force&&now-lastP<600)return;lastP=now;try{localStorage.setItem(rid,JSON.stringify({idx:idx,acc:acc,t:now}))}catch(e){}}
+function clearPersist(){try{localStorage.removeItem(rid)}catch(e){}}
+async function once(msgs){
+var res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,model:($("model").value||"").trim()||undefined,cache:cacheFlag}),signal:ctrl.signal});
+if(!res.ok||!res.body){var er=await res.json().catch(function(){return{}});var e2=new Error(er.error||("HTTP "+res.status));e2.fatal=(res.status===400||res.status===401||res.status===403);throw e2}
+var reader=res.body.getReader();var dec=new TextDecoder();var buf="";
+while(true){var rd=await reader.read();if(rd.done)break;buf+=dec.decode(rd.value,{stream:true});var parts=buf.split("\n");buf=parts.pop();for(var k=0;k<parts.length;k++){var line=parts[k].trim();if(!line||line.indexOf("data:")!==0)continue;var payload=line.slice(5).trim();if(payload==="[DONE]")continue;try{var j=JSON.parse(payload);var delta=(j.choices&&j.choices[0]&&(j.choices[0].delta&&j.choices[0].delta.content))||j.response||"";if(delta){acc+=delta;state.chat[idx].content=acc;paint();persist(false)}}catch(e){}}}
+}
+var tries=0;var maxTries=4;
+try{
+while(true){
+try{
+var msgs=baseMsgs;
+if(acc){msgs=baseMsgs.slice();if(msgs.length&&msgs[msgs.length-1].role==="assistant"){msgs[msgs.length-1]={role:"assistant",content:acc}}else{msgs.push({role:"assistant",content:acc})}msgs.push({role:"user",content:"Lanjutkan jawaban sebelumnya persis dari karakter terakhir yang kamu tulis. Jangan mengulang bagian yang sudah ada, langsung sambung."});cacheFlag=false}
+await once(msgs);
+break;
+}catch(e){
+if(e.name==="AbortError")throw e;
+if(e.fatal)throw e;
+tries++;
+if(tries>=maxTries)throw e;
+var wait=Math.min(700*Math.pow(2,tries-1),6000);
+state.chat[idx].content=acc+"\n\n\u23f3 *Koneksi terputus, menyambung ulang ("+tries+"/"+(maxTries-1)+")...*";paint();
+await new Promise(function(r){setTimeout(r,wait)});
+if(window.__ctrl!==ctrl)throw new Error("Dibatalkan");
+}
+}
+state.chat[idx].content=acc;
+var facts=collectMemoryFrom(acc);if(facts.length){facts.forEach(function(f){if(state.memory.indexOf(f)<0)state.memory.push(f)});saveMemory()}
+clearPersist();renderChat();
+}catch(e){
+if(e.name!=="AbortError"){
+if(acc){state.chat[idx].content=acc+"\n\n\u26a0\ufe0f *Terputus: "+e.message+". Klik \u25b6\ufe0f Lanjutkan untuk menyambung.*";persist(true)}
+else{state.chat[idx].content="\u26a0\ufe0f "+e.message}
+toast("Error: "+e.message,true)
+}else{clearPersist()}
+renderChat()
+}finally{window.__ctrl=null;$("send").textContent="\u2191";saveHistory()}
+}
 async function sendChat(){var inp=$("chatin");var text=inp.value.trim();if(!text&&!pending.length)return;if(window.__ctrl){return}if(isZipCmd(text)){pushMsg("user",text);pushMsg("assistant","Oke, aku bungkus semua kode jadi satu ZIP \ud83d\udce6");renderChat();zipAll();inp.value="";return}var files=pending.slice();pending=[];renderAttbar();pushMsg("user",text,files);inp.value="";inp.style.height="auto";renderChat();await streamReply()}
 async function saveEdit(i,nt){state.chat[i].content=nt;state.chat=state.chat.slice(0,i+1);editing=-1;renderChat();await streamReply()}
-async function regenerateFrom(i){state.chat=state.chat.slice(0,i);renderChat();await streamReply()}
+async function regenerateFrom(i){window.__nocacheOnce=true;state.chat=state.chat.slice(0,i);renderChat();await streamReply()}
 function newChat(){state.chat=[];state.chatId=null;history.pushState({},"","/");renderChat();loadHistory()}
 async function openChat(id){if(!id){newChat();return}try{var r=await fetch("/api/history?id="+encodeURIComponent(id));var d=await r.json();if(d.error){toast(d.error,true);return}state.chatId=d.id;state.chat=d.messages||[];history.pushState({},"","/chat/"+encodeURIComponent(d.id));renderChat();renderHistory();if(window.innerWidth<=900){document.body.classList.add("nohist");updateBackdrop()}}catch(e){toast("Gagal buka chat",true)}}
 async function saveHistory(){try{if(!state.chat.length)return;var payload={id:state.chatId,messages:state.chat};if(!state.chatId){var fu=state.chat.filter(function(m){return m.role==="user"})[0];payload.title=fu?fu.content.slice(0,60):"Chat baru"}var r=await fetch("/api/history/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});var d=await r.json();if(d.ok&&d.id){var isNew=state.chatId!==d.id;state.chatId=d.id;if(isNew)history.replaceState({},"","/chat/"+encodeURIComponent(d.id));loadHistory()}}catch(e){}}
