@@ -38,9 +38,15 @@ jobs:
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: $ secrets.CLOUDFLARE_API_TOKEN 
-          accountId: $ secrets.CLOUDFLARE_ACCOUNT_ID 
+          apiToken: __API_TOKEN__
+          accountId: __ACCOUNT_ID__
 ```
+
+**Ganti `__API_TOKEN__` dan `__ACCOUNT_ID__`** dengan ekspresi secret GitHub Actions standar (format yang biasa dipakai: tanda dolar diikuti sepasang kurung kurawal ganda):
+- `apiToken` → isinya: tanda dolar `$`, lalu buka kurung kurawal ganda, teks `secrets.CLOUDFLARE_API_TOKEN`, lalu tutup kurung kurawal ganda.
+- `accountId` → sama persis, tapi pakai teks `secrets.CLOUDFLARE_ACCOUNT_ID`.
+
+Ini format standar GitHub Actions buat manggil secret (bisa dicontek dari repo Actions mana pun). Hasil akhir dua baris itu, misalnya baris `apiToken`, jadi: `$` + kurung-ganda-buka + `secrets.CLOUDFLARE_API_TOKEN` + kurung-ganda-tutup.
 
 > File ini nggak bisa ditambahin otomatis lewat integrasi (butuh izin `workflow`), jadi tambahin manual sekali ini aja.
 
